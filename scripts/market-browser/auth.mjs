@@ -1,7 +1,7 @@
 // 会话资料仅本机 AES-GCM 加密保存；密钥由当前用户的 macOS 登录钥匙串保管。
 // 凭据从不写入运营数据库、日志、HTTP 响应或源码导出。
 import{spawnSync}from'node:child_process';import{randomBytes,createCipheriv,createDecipheriv}from'node:crypto';import{readFile,writeFile,rename,chmod}from'node:fs/promises';import{join}from'node:path';import{PORTALS}from'./portals.mjs';
-const account='ai-hub-market',service=process.env.AI_HUB_MARKET_KEYCHAIN_SERVICE||'com.leo.aihub.market.auth-state.v1';
+const account='ai-hub-market',service=process.env.AI_HUB_MARKET_KEYCHAIN_SERVICE||'com.aihub.desktop.market.auth-state.v1';
 function key(){
  if(process.platform!=='darwin')throw new Error('auth_key_unavailable');
  const find=()=>spawnSync('/usr/bin/security',['find-generic-password','-a',account,'-s',service,'-w'],{encoding:'utf8'});

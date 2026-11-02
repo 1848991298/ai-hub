@@ -1,0 +1,8 @@
+{
+  "base_token": "YOURBASETOKEN",
+  "base_url": "https://your-company.feishu.cn/base/YOURBASETOKEN",
+  "tables": {
+    "issue": {"id":"tblISSUEID","fields":{"content":"fldIssueContent","status":"fldIssueStatus","created":"fldIssueCreated","due":"fldIssueDue","priority":"fldIssuePriority","note":"fldIssueNote"}},
+    "task": {"id":"tblTASKID","fields":{"content":"fldTaskContent","status":"fldTaskStatus","created":"fldTaskCreated","due":"fldTaskDue","priority":"fldTaskPriority","note":"fldTaskNote"}}
+  }
+}

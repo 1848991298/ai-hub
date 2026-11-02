@@ -1,12 +1,21 @@
-.local/
-node_modules/
-ui/dist/
+# 客户端旧副本、历史归档和生成的迁移包只保留本地。
+.backups/
+archive/
+dist/
+.DS_Store
 __pycache__/
 *.py[cod]
-.DS_Store
+node_modules/
+.local/
+.build/
+
+# 本地账号、签名与环境配置不进入维护源。
 .env
 .env.*
 *.pem
 *.key
-*.sqlite*
-*.enc
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision

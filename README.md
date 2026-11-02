@@ -1,92 +1,104 @@
-# ISHO 运营大屏
+# AI Hub
 
-从 AI Hub 独立导出的应用运营源码，固定产品 `com.jryx.isho`。不需要安装 AI Hub，也不读取个人规则、技能、工程、AI 用量或飞书台账。
+完整的本地 AI 工作台源码：管理工程、个人规则与技能、客户端映射、模型用量、飞书问题与任务，以及 ISHO 应用运营。包含 React 网页、Python 服务和 macOS App 外壳；不是只有运营大屏。
 
-支持版本与审核进度、下载趋势、用户评价、CSV 导入导出，以及独立采集 / 共享服务器模式切换。这是源码项目，不是免环境安装包；首次需要安装依赖。
+仓库保留早期 `isho-operations` 地址，当前根目录已经是完整 AI Hub。公开版不预装作者的个人规则、固定技能、工程清单、飞书资源或商店登录资料。
 
-## Mac 上快速使用
+## Mac 快速运行
 
-1. 安装 Python 3.9+、Node.js 22.12+。已有符合版本的环境可跳过；使用 Homebrew 的同事可运行：
-
-   ```bash
-   brew install python@3.12 node@22
-   ```
-
-2. 在 GitHub 点击 **Code → Download ZIP** 并解压，或克隆仓库。终端进入解压后的项目目录，然后运行：
-
-   ```bash
-   bash setup.command
-   ```
-
-   首次初始化会下载前端依赖、Playwright 1.64.1 和 Chromium，需要联网。
-
-3. 运行：
-
-   ```bash
-   bash start.command
-   ```
-
-   浏览器会打开 `http://127.0.0.1:4321`。也可双击 `start.command`；关闭终端或按 `Control+C` 停止服务。端口占用时运行 `bash start.command --port 4322`。不要关闭原有占用程序来强行启动。
-
-## 两种数据模式
-
-### 独立采集
-
-默认模式。本机数据库为空，不携带作者的运营记录。点击商店连接中的登录按钮，在新开的官方窗口里自行登录对应开发者账号，完成必要的扫码、验证码和团队选择。
-
-目前 OPPO、vivo、小米已实现版本 / 审核、下载与评论的只读采集；荣耀和应用宝保留独立入口，实际可用字段以登录权限与适配器为准，不代表全部平台已接通。采集器仍固定查询 ISHO 包名，并非任意 App 通用采集器。
-
-账号有对应 ISHO 查询权限后才能取得真实数据。服务运行期间，每 30 分钟同步已经启用的渠道；关机、休眠、关闭服务时不采集。平台登录过期需要在官方窗口补登。下载、更新、安装次数、评分数量与文字评论数分别处理；未知值不填 0。不自动上传、提审、发布或回复评论。
-
-### 共享服务器
-
-点击顶部“共享服务器”或“服务器设置”，填写已经部署的运营服务 HTTPS 地址及分配的访问凭据：
-
-- `screen`：只读查看。
-- `admin`：管理记录。
-
-这两个账号是运营服务账号，不是商店账号。首次没有服务器时继续用独立模式即可。
-
-切换至共享模式会暂停本机采集；有采集 / 登录任务进行时，先完成或关闭官方窗口再切换。切回独立模式保留本机原来的数据和自动开关。两种模式不会自动复制、上传或合并数据库；连接失败会报错，不回退到本机旧数据。
-
-所有同事配置同一个服务器，即可查看同一份服务器记录。提供的服务器是网页 / 数据 API，尚不包含云端自动登录采集；需要维护者另行接入服务器的数据采集或入库任务，不能把“部署网页”当作“云端采集完成”。
-
-## 数据与凭据存放
-
-- `.local/market.sqlite`：本机运营记录与修改历史。
-- `.local/connection.json`：模式与共享服务器配置，含访问凭据；仅当前用户可读（600），不要发给其他人。
-- `.local/market-browser/`：各商店隔离登录资料。认证检查点为本机密文，密钥使用 Mac 登录钥匙串，命名空间与 AI Hub 分开。
-- `.local/market-collector.json`：自动同步开关。
-
-`.local/`、数据库、认证文件、环境文件和依赖都已忽略，不进入 Git。备份 SQLite 请用 `.backup`，或停止服务后再复制；不要直接复制正在写入的数据库。同事必须自行登录商店，不复制其他人的浏览器资料或钥匙串。
-
-## 可选：部署共享服务
-
-服务器有 Docker Compose 时，在服务器上创建私有环境文件（不上传 Git）：
-
-```text
-MARKET_PASSWORD=至少20字符的管理员随机密码
-MARKET_VIEW_PASSWORD=另一个至少20字符的只读随机密码
-MARKET_PUBLIC_ORIGIN=https://你的实际域名
-```
-
-在项目目录运行：
+需要 Python 3.9+、Node.js 22.12+、Git；可通过 Homebrew 安装 Python 和 Node。先在 GitHub 点击 **Code → Download ZIP** 解压，或克隆仓库，再进入项目目录：
 
 ```bash
-docker compose --env-file /安全路径/market.env -f deploy/compose.yaml up -d --build
+bash setup.command
+bash start.command
 ```
 
-服务只映射服务器本机 `127.0.0.1:4320`。请使用现有 Nginx / Caddy 配置 HTTPS 反向代理，保留原始 `Host`、`Origin`、`Authorization` 请求头。服务使用 HTTP Basic 认证，不要将明文 HTTP 账号直接暴露公网。数据在 Docker volume 中。没有域名与实际部署验收前，不表示共享服务已经上线。
+首次初始化会安装前端和商店浏览器依赖并构建页面，需要联网。启动后浏览器打开 `http://127.0.0.1:4317`；关闭终端或按 `Control+C` 停止本机服务。端口占用时可运行 `bash start.command --port 4318`。已有其他 Hub 目录时，请分别使用不同端口，不要覆盖已有数据。
 
-## 更新与验证
+## 按模块使用
 
-更新代码前备份 `.local/` 并保护本机改动；拉取或重新下载源码后重新运行 `bash setup.command`。全新下载目录会使用全新本地数据，不会自动寻找旧项目目录。
+| 模块 | 功能与入口 | 首次使用需要做什么 |
+| --- | --- | --- |
+| 工作台与外观 | 工程入口、主题、字号、可调面板与搜索 | 默认只登记当前 Hub；外观保存在本机 |
+| 工程合集 | 选择目录、读取 Git 分支和 worktree、打开 SourceTree | 在界面添加自己的目录；不会替你 checkout、提交或推送 |
+| Rules | 编辑自己的共享规则；核对 Cursor User Rules 与 Codex 入口 | 先填写 `rules/global.md`，查看映射差异；Cursor 原生操作需本机权限 |
+| Skills | 查看 `skills/` 中登记的技能及其映射 | 默认无个人固定技能；添加自己的技能并登记 `manifest.tsv` |
+| 客户端与变更 | 检查映射、工作区差异和迁移／恢复来源 | 文件链接和客户端实际加载是两种状态，分别核实 |
+| 用量中心 | 读取本机可用的 CodexBar／ccusage 来源，按日期看用量 | 自行安装、登录相应来源；没有来源时显示未接入 |
+| 问题与任务 | 读取、创建、修改自己的飞书多维表记录 | 配置自己的表和字段；未配置时不查询任何飞书资源 |
+| 应用运营 | ISHO 版本／审核、下载、评论、CSV 与大屏 | 自行登录商店并具备 `com.jryx.isho` 的查询权限 |
+| 独立运营工具 | 脱离完整 Hub，提供独立／共享服务器开关 | 按下方命令导出后运行；不复制 Hub 数据 |
+
+### 自己的规则与技能
+
+公开版只提供通用规则模板；不会安装原作者的固定技能。浏览工作台不需要先写入客户端全局配置。需要映射时先检查：
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
-PYTHONPATH=scripts python3 -m unittest discover -s scripts -p 'test_market*hub.py'
+bash scripts/pull.sh --check
+```
+
+确认检查结果和已有差异后，才执行：
+
+```bash
+AI_HUB_APPLY_LIVE=1 bash scripts/pull.sh --apply --to both
+```
+
+固定入口是 `~/.ai-hub`。已有其他入口或规则存在差异时工具会停止，不要为了安装公开版直接覆盖它们。Codex 全局入口及个人技能使用链接；Cursor 共享正文由引导规则指向，原生 User Rules 同步还需要 Cursor 正在运行及系统辅助功能／自动化权限。不要把映射文件存在当作客户端已经加载。
+
+### 模型用量
+
+用量来源和账号由使用者自行准备。可选 ccusage 依赖可运行 `npm --prefix scripts/usage-tools ci` 安装；CodexBar 按自己的账号登录。该模块读取的是本机来源，不会带入作者的消耗记录或账号资料。
+
+### 飞书问题与任务
+
+安装并登录 `lark-cli` 后，复制配置示例到本机忽略目录，填入自己的 Base、表和字段 ID：
+
+```bash
+mkdir -p .local
+cp tracker-config.example.json .local/tracker-config.json
+chmod 600 .local/tracker-config.json
+```
+
+需要两张表（问题、任务），各有内容、状态、创建时间、截止时间、优先级、备注字段。状态为“未启动／进行中／已结束”，优先级为 P0／P1／P2。配置后重新启动服务。未配置或配置无效时，不会自动查询任何人的表；新增／修改仍受当前飞书账号权限控制，冲突不直接覆盖。
+
+### ISHO 应用运营
+
+OPPO、vivo、小米已有只读采集实现；荣耀、应用宝保留入口，实际字段按适配器和账号权限核实。固定应用包名为 `com.jryx.isho`，不是任意产品通用采集器。商店登录过期时需在官方窗口补登；不会自动上传、提审、发布或回复评论。新增、活跃、留存及业务上传量需来自业务后端，未知值不填零。
+
+完整 Hub 默认保存本机记录；需要独立／共享开关时，导出独立运营工具：
+
+```bash
+python3 scripts/export_market.py --directory .build/operations
+cd .build/operations
+bash setup.command
+bash start.command
+```
+
+独立工具保留中文说明、初始化和启动脚本。共享模式连接已部署的运营服务，失败不回退本机；模式切换不自动迁移或合并数据。`deploy/market/` 提供共享网页／数据 API 容器配置，但不代表云端采集已经部署。
+
+### 可选 macOS App
+
+需要 Xcode 命令行工具，在项目根目录运行：
+
+```bash
+python3 scripts/build_macos_app.py
+```
+
+生成的 `dist/AI Hub.app` 是本机架构的 App，仍需要 Python、源码目录和已安装的依赖；不是免运行环境安装包。首次运行选择自己的 Hub 来源目录即可。应用运营也可以通过网页使用。
+
+## 本地数据与公开范围
+
+`.local/` 保存工程登记、界面偏好、台账配置、数据库、采集状态和登录资料；`.backups/`、`archive/`、`dist/`、`.build/` 和依赖只保存在本机。不要上传这些内容，不复制别人的登录态、钥匙串或数据库。
+
+使用者添加自己的规则、技能、项目和资源地址后，再公开自己的 fork 前须重新检查。`scripts/export_public_hub.py` 按白名单重新导出通用源码，遇到个人路径、私人资源地址或凭据模式会停止；该检查不能替代人工审查。
+
+## 验证
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_*.py'
+node --test ui/src/*.test.js
 node --test scripts/market-browser/test-*.mjs
 npm --prefix ui run build
 ```
 
-本项目不包含任何作者账号、个人数据库、AI Hub 全局规则、个人技能或本机工程清单。源码的公开 / 私有范围由仓库拥有者决定；未附开源许可证时，不代表授予公开再分发授权。
+测试采用临时数据和夹具；同事真实账号、辅助功能权限、设备与服务器需在自己的环境验证。没有附开源许可证时，不代表授予任意再分发或商业使用权。
