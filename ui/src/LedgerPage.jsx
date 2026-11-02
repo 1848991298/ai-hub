@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Plus, RefreshCw, Save, X } from 'lucide-react';
-import { blankForm, changedFields, filterRecords, sortRecords, statuses, priorities } from './ledger-model.js';
+import { ArrowDown, ArrowUp, Plus, RefreshCw, Save, X } from 'lucide-react';
+import { blankForm, changedFields, columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, isOverdue, ledgerColumnDefaults, nextSort, sortRecords, statuses, priorities } from './ledger-model.js';
 import './ledger.css';
 
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date());
@@ -25,20 +25,50 @@ function valuesOf(row) {
 const statusTone = { '未启动': 'is-idle', '进行中': 'is-run', '已结束': 'is-done' };
 const priorityTone = { P0: 'is-p0', P1: 'is-p1', P2: 'is-p2' };
 
-function Pill({ tone, children }) {
+function Pill({ tone, mode, onClick, children }) {
   if (!children) return '—';
-  return <span className={`ledger-pill ${tone || ''}`}>{children}</span>;
+  const className = `ledger-pill ${tone || ''} ${mode ? `is-${mode}` : ''}`;
+  if (!onClick) return <span className={className}>{children}</span>;
+  return <button type="button" className={className} aria-pressed={mode === 'include' ? 'true' : mode === 'exclude' ? 'mixed' : 'false'} onClick={event => { event.stopPropagation(); onClick(); }}>{children}</button>;
 }
 
-export default function LedgerPage() {
+function SortHeader({ column, label, sort, onSort }) {
+  const active = sort.key === column;
+  return <button type="button" className={active ? 'is-sorted' : ''} onClick={() => onSort(column)}>{label}{active && (sort.dir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />)}</button>;
+}
+
+function ColumnResize({ label, value, minimum, maximum, fallback, onChange }) {
+  const drag = useRef(null);
+  function finish() { drag.current = null; document.body.classList.remove('is-resizing'); }
+  function keyDown(event) {
+    const change = { ArrowLeft: -16, ArrowRight: 16 }[event.key];
+    if (change !== undefined || ['Home', 'End', 'Enter'].includes(event.key)) {
+      event.preventDefault();
+      onChange(event.key === 'Home' ? minimum : event.key === 'End' ? maximum : event.key === 'Enter' ? fallback : Math.min(maximum, Math.max(minimum, value + change)));
+    }
+  }
+  return <div role="separator" aria-orientation="vertical" aria-label={`调整${label}列宽`} aria-valuemin={minimum} aria-valuemax={maximum} aria-valuenow={value} tabIndex={0} title="拖动调整列宽 · 双击恢复" className="ledger-col-resize"
+    onKeyDown={keyDown} onDoubleClick={() => onChange(fallback)} onClick={event => event.stopPropagation()}
+    onPointerDown={event => { if (!event.isPrimary || event.button !== 0) return; event.preventDefault(); event.stopPropagation(); event.currentTarget.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId); drag.current = { pointer: event.pointerId, x: event.clientX, width: value }; document.body.classList.add('is-resizing'); }}
+    onPointerMove={event => { const start = drag.current; if (start?.pointer === event.pointerId) onChange(Math.min(maximum, Math.max(minimum, Math.round(start.width + event.clientX - start.x)))); }}
+    onPointerUp={event => { if (drag.current?.pointer === event.pointerId) { event.currentTarget.releasePointerCapture(event.pointerId); finish(); } }}
+    onPointerCancel={finish} onLostPointerCapture={finish} />;
+}
+
+const columnOrder = ['content', 'status', 'created', 'due', 'priority', 'note'];
+const columnLabels = { content: '内容', status: '状态', created: '创建时间', due: '截止时间', priority: '优先级', note: '备注' };
+const columnLimits = { content: [160, 720], status: [88, 200], created: [128, 260], due: [128, 280], priority: [84, 180], note: [120, 560] };
+
+export default function LedgerPage({ sinkDone = true }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [kind, setKind] = useState('issue');
-  const [filters, setFilters] = useState({ status: 'all', priority: 'all', due: 'all' });
-  const [sort, setSort] = useState('due');
+  const [filters, setFilters] = useState(emptyFilters);
+  const [sort, setSort] = useState({ key: 'due', dir: 'asc' });
+  const [widths, setWidths] = useState(() => { try { return columnWidths(JSON.parse(localStorage.getItem('ai-hub-ledger-columns'))); } catch { return columnWidths(); } });
   const [editor, setEditor] = useState(null);
   const mounted = useRef(true);
 
@@ -53,6 +83,8 @@ export default function LedgerPage() {
       if (mounted.current) setLoading(false);
     }
   }
+
+  useEffect(() => { try { localStorage.setItem('ai-hub-ledger-columns', JSON.stringify(widths)); } catch { /* 本窗口仍可使用当前列宽。 */ } }, [widths]);
 
   useEffect(() => {
     mounted.current = true;
@@ -102,10 +134,31 @@ export default function LedgerPage() {
     }
   }
 
-  const rows = data ? (kind === 'issue' ? data.issues : data.tasks) : [];
-  const visible = sortRecords(filterRecords(rows, filters, today()), sort);
-  const synced = data?.synced_at ? new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未成功';
+  function setFacet(group, value) {
+    setFilters(current => ({ ...current, [group]: cycleFacet(current[group], value) }));
+  }
+  function clearFacet(group, value) {
+    setFilters(current => {
+      const next = { ...current[group] };
+      delete next[value];
+      return { ...current, [group]: next };
+    });
+  }
   const day = today();
+  const rows = data ? (kind === 'issue' ? data.issues : data.tasks) : [];
+  const visible = sortRecords(filterRecords(rows, filters, day), sort, sinkDone);
+  const tableWidth = columnOrder.reduce((sum, key) => sum + widths[key], 0);
+  const counts = {
+    status: Object.fromEntries(statuses.map(item => [item, rows.filter(row => row.status === item).length])),
+    priority: Object.fromEntries(priorities.map(item => [item, rows.filter(row => row.priority === item).length])),
+    overdue: rows.filter(row => isOverdue(row, day)).length,
+  };
+  const chips = [
+    ...Object.entries(filters.status).map(([value, mode]) => ({ key: `status-${value}`, label: `${mode === 'exclude' ? '排除' : '只看'} ${value}`, clear: () => clearFacet('status', value) })),
+    ...Object.entries(filters.priority).map(([value, mode]) => ({ key: `priority-${value}`, label: `${mode === 'exclude' ? '排除' : '只看'} ${value}`, clear: () => clearFacet('priority', value) })),
+    ...(filters.overdue ? [{ key: 'overdue', label: filters.overdue === 'exclude' ? '排除已过截止' : '只看已过截止', clear: () => setFilters(current => ({ ...current, overdue: null })) }] : []),
+  ];
+  const synced = data?.synced_at ? new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未成功';
   const label = kind === 'issue' ? '问题' : '任务';
   return <section className="ledger">
     <header className="ledger-head">
@@ -123,29 +176,38 @@ export default function LedgerPage() {
     {!editor && error && <div className="ledger-alert" role="alert">{error}{data?.missing_scopes?.length ? ` 缺少 ${data.missing_scopes.join('、')}。` : ''}</div>}
     {message && <div className="ledger-ok" role="status">{message}</div>}
     <div className="ledger-meta"><span>最近成功读取：{synced}</span><span>退出 Hub 后停止读取。到期只用于筛选，不会改成已结束。</span></div>
+    <section className="ledger-overview" aria-label={`${label}总览`}>
+      <div className="ledger-stat-row">
+        {statuses.map(item => <button key={item} type="button" className={`ledger-stat ${filters.status[item] ? `is-${filters.status[item]}` : ''}`} aria-pressed={filters.status[item] ? 'true' : 'false'} onClick={() => setFacet('status', item)}><strong>{counts.status[item]}</strong><small>{item}</small></button>)}
+        {priorities.map(item => <button key={item} type="button" className={`ledger-stat ${filters.priority[item] ? `is-${filters.priority[item]}` : ''}`} aria-pressed={filters.priority[item] ? 'true' : 'false'} onClick={() => setFacet('priority', item)}><strong>{counts.priority[item]}</strong><small>{item}</small></button>)}
+        <button type="button" className={`ledger-stat ${filters.overdue ? `is-${filters.overdue}` : ''}`} aria-pressed={filters.overdue ? 'true' : 'false'} onClick={() => setFilters(current => ({ ...current, overdue: cycleMode(current.overdue) }))}><strong>{counts.overdue}</strong><small>已过截止</small></button>
+      </div>
+      {!!chips.length && <div className="ledger-chips">{chips.map(chip => <button key={chip.key} type="button" className="ledger-chip" onClick={chip.clear}>{chip.label}<X size={13} /></button>)}<button type="button" className="ledger-chip is-clear" onClick={() => setFilters(emptyFilters())}>清除筛选</button></div>}
+    </section>
     <div className="ledger-toolbar">
       <div className="ledger-tabs" role="tablist">
         <button type="button" className={kind === 'issue' ? 'selected' : ''} onClick={() => setKind('issue')}>问题 <em>{data?.issues.length ?? ''}</em></button>
         <button type="button" className={kind === 'task' ? 'selected' : ''} onClick={() => setKind('task')}>任务 <em>{data?.tasks.length ?? ''}</em></button>
       </div>
-      <div className="ledger-filters">
-        <select aria-label="状态" value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}><option value="all">全部状态</option>{statuses.map(item => <option key={item}>{item}</option>)}</select>
-        <select aria-label="优先级" value={filters.priority} onChange={event => setFilters({ ...filters, priority: event.target.value })}><option value="all">全部优先级</option><option value="none">未设优先级</option>{priorities.map(item => <option key={item}>{item}</option>)}</select>
-        <select aria-label="截止" value={filters.due} onChange={event => setFilters({ ...filters, due: event.target.value })}><option value="all">全部日期</option><option value="empty">未设截止</option><option value="set">已设截止</option><option value="past">已过截止</option></select>
-        <select aria-label="排序" value={sort} onChange={event => setSort(event.target.value)}><option value="due">按截止日期</option><option value="priority">按优先级</option><option value="created">按创建时间</option></select>
-      </div>
+      <span className="ledger-caption">数字和标签点一下只看，再点排除，第三次取消。点表头切换排序。{sinkDone ? '已结束排在底部。' : '已结束按表头排序。'}拖动列边调整宽度。</span>
     </div>
     <div className="ledger-table-wrap">
-      <table>
-        <thead><tr><th>内容</th><th>状态</th><th>创建时间</th><th>截止时间</th><th>优先级</th><th>备注</th></tr></thead>
+      <table style={{ width: tableWidth, minWidth: '100%' }}>
+        <colgroup>{columnOrder.map(key => <col key={key} style={{ width: widths[key] }} />)}</colgroup>
+        <thead><tr>
+          {columnOrder.map(key => <th key={key} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'} style={{ width: widths[key] }}>
+            {key === 'content' || key === 'note' ? columnLabels[key] : <SortHeader column={key} label={columnLabels[key]} sort={sort} onSort={column => setSort(current => nextSort(current, column))} />}
+            <ColumnResize label={columnLabels[key]} value={widths[key]} minimum={columnLimits[key][0]} maximum={columnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => setWidths(current => columnWidths({ ...current, [key]: value }))} />
+          </th>)}
+        </tr></thead>
         <tbody>{visible.map(row => {
-          const overdue = row.due && row.due < day && row.status !== '已结束';
+          const overdue = isOverdue(row, day);
           return <tr key={row.id} onClick={() => openEdit(row)}>
             <td className="ledger-content">{row.content}</td>
-            <td><Pill tone={statusTone[row.status]}>{row.status}</Pill></td>
+            <td><Pill tone={statusTone[row.status]} mode={filters.status[row.status]} onClick={() => setFacet('status', row.status)}>{row.status}</Pill></td>
             <td className="ledger-time">{row.created_at || '—'}</td>
             <td className={overdue ? 'ledger-time ledger-past' : 'ledger-time'}>{row.due || '—'}{overdue && <small>已过截止，状态未改</small>}</td>
-            <td><Pill tone={priorityTone[row.priority]}>{row.priority}</Pill></td>
+            <td><Pill tone={priorityTone[row.priority]} mode={filters.priority[row.priority]} onClick={row.priority ? () => setFacet('priority', row.priority) : undefined}>{row.priority}</Pill></td>
             <td className="ledger-note">{row.note || '—'}</td>
           </tr>;
         })}</tbody>

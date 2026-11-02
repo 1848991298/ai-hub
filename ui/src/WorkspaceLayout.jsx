@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { clamp, defaultLayout, fitLayout, layoutKey, validLayout } from './workspace-layout.js';
+import { clamp, defaultLayout, fitLayout, layoutKey, sidebarSpan, validLayout } from './workspace-layout.js';
 
 export function useWorkspaceLayout() {
   const [layout, setLayout] = useState(() => { try { return validLayout(JSON.parse(localStorage.getItem(layoutKey))); } catch { return defaultLayout; } });
@@ -8,7 +8,7 @@ export function useWorkspaceLayout() {
   useEffect(() => { try { localStorage.setItem(layoutKey, JSON.stringify(layout)); } catch { /* 本窗口仍可使用布局。 */ } }, [layout]);
   const fitted = fitLayout(layout, viewportWidth);
   function update(key, value) { setLayout(current => validLayout({ ...current, [key]: value })); }
-  return { ...fitted, viewportWidth, update, reset: () => setLayout(current => ({ ...defaultLayout, fontSize: current.fontSize })) };
+  return { ...fitted, sidebarSpan: sidebarSpan(fitted), viewportWidth, update, reset: () => setLayout(current => validLayout({ ...defaultLayout, fontSize: current.fontSize, sinkDone: current.sinkDone })) };
 }
 
 export function PanelResize({ label, controls, value, minimum, maximum, defaultValue, direction = 1, onChange, className = '' }) {

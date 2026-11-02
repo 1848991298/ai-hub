@@ -23,6 +23,15 @@ button,input,textarea{font-family:inherit}code,kbd,pre,.branch-value,.editor-con
 .panel-resize>span{position:absolute;inset:0 auto 0 3px;width:1px;background:var(--border)}
 .panel-resize:hover>span,.panel-resize:focus-visible>span{background:var(--accent);width:2px}.panel-resize:focus-visible{outline:1px solid var(--accent);outline-offset:-1px}
 .sidebar-resize{position:absolute;right:-4px;top:0;bottom:0;width:8px;background:transparent}.sidebar-resize>span{left:3px;background:transparent}
+@media(min-width:761px){
+  .sidebar.is-collapsed{padding-left:8px;padding-right:8px}
+  .sidebar.is-collapsed .brand,.sidebar.is-collapsed .workspace-switch,.sidebar.is-collapsed .nav-item,.sidebar.is-collapsed .profile{justify-content:center;gap:0;margin-left:0;margin-right:0;padding-left:0;padding-right:0}
+  .sidebar.is-collapsed .profile{width:100%}
+  .sidebar.is-collapsed .nav-label,.sidebar.is-collapsed .brand-copy,.sidebar.is-collapsed .nav-group,.sidebar.is-collapsed .local-space,.sidebar.is-collapsed .nav-count,.sidebar.is-collapsed .nav-extra{display:none}
+}
+@media(max-width:1250px){.sidebar{width:auto}.workspace{margin-left:0}}
+@media(max-width:1050px){.sidebar{width:auto}.workspace{margin-left:0}}
+@media(max-width:760px){.sidebar-toggle{display:none}}
 .is-resizing,.is-resizing *{cursor:col-resize!important;user-select:none!important}
 .workspace-body>.panel-resize{display:block}.inspector-reopen{top:69px;background:var(--surface);color:var(--text-secondary)}
 .layout-setting-controls{display:flex;align-items:center;gap:7px}.layout-setting-controls .segmented button{font-size:var(--text-xs);padding:6px 8px}
