@@ -69,7 +69,7 @@ def clean_content(name, data):
         text = re.sub(r'(<strong>)[^<]+ 的空间(</strong>)', r'\1我的空间\2', text)
         text = re.sub(r'(<button className="profile"[^\n]*?<strong>)[^<]+(</strong>)', r'\1本机用户\2', text)
         text = text.replace("useState({ type: 'project', id: 'isho' })", "useState({ type: 'project', id: 'hub' })")
-        text = re.sub(r'https://[^/]+\.feishu\.cn/docx/[A-Za-z0-9]+', 'https://github.com/1848991298/isho-operations#readme', text)
+        text = re.sub(r'https://[^/]+\.feishu\.cn/docx/[A-Za-z0-9]+', 'https://github.com/1848991298/ai-hub#readme', text)
         text = text.replace('>L</span>', '>A</span>').replace('>L</div>', '>A</div>')
     if name == 'ui/index.html':
         text = re.sub(r'(<meta name="description" content=")[^"]*(" />)', r'\1工程、Skills 与 Rules 本地工作台。\2', text)

@@ -2,7 +2,7 @@
 
 AI Hub 是在自己 Mac 上运行的工作台。你可以把 Cursor / Codex 的共享规则放在一处维护，集中查看工程和技能，了解本机 AI 用量，也可以查看飞书问题任务、ISHO 在各应用商店的版本、下载与评论。
 
-网页和可选 macOS App 共用界面与本机数据。你可以只用应用运营，也可以逐步启用其他模块。仓库沿用 `isho-operations` 地址，目前提供的是完整 AI Hub 源码。
+网页和可选 macOS App 共用界面与本机数据。你可以只用应用运营，也可以逐步启用其他模块。公开仓库是 `ai-hub`，目前提供的是完整 AI Hub 源码。
 
 ## 先看看界面
 
@@ -41,8 +41,8 @@ AI Hub 是在自己 Mac 上运行的工作台。你可以把 Cursor / Codex 的�
 1. 点击本仓库 **Code → Download ZIP**，解压后用终端进入目录。也可以克隆：
 
    ```bash
-   git clone https://github.com/1848991298/isho-operations.git
-   cd isho-operations
+   git clone https://github.com/1848991298/ai-hub.git
+   cd ai-hub
    ```
 
 2. 初始化一次，安装依赖并构建网页：
