@@ -11,6 +11,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+SCREENSHOTS = ('docs/images/overview.png', 'docs/images/projects.png', 'docs/images/market.png')
 TEMPLATES = ('README.md', 'RULE.md', 'inventory.md', 'manifest.tsv', 'setup.command', 'start.command',
              'tracker-config.example.json', 'rules/global.md', 'rules/cursor-bootstrap.md',
              'rules/agents-bootstrap.md', 'skills/README.md', 'ui/projects.json',
@@ -28,7 +29,7 @@ PATTERNS = (
 
 
 def source_files():
-    files = [(ROOT / name, name) for name in TOP]
+    files = [(ROOT / name, name) for name in (*TOP, *SCREENSHOTS)]
     template_root = ROOT / 'distribution/public'
     files += [((template_root if template_root.is_dir() else ROOT) / name, name) for name in TEMPLATES]
     files += [(p, p.relative_to(ROOT).as_posix()) for p in sorted((ROOT / 'scripts').glob('*.py'))]
@@ -61,6 +62,8 @@ def private_markers():
 
 
 def clean_content(name, data):
+    if name in SCREENSHOTS:
+        return data
     text = data.decode('utf-8')
     if name == 'ui/src/main.jsx':
         text = re.sub(r'(<strong>)[^<]+ 的空间(</strong>)', r'\1我的空间\2', text)
@@ -86,6 +89,10 @@ def audit(contents, markers=()):
     for name, data in contents.items():
         if BLOCKED_PARTS.intersection(Path(name).parts) or name.startswith('rules/clients/') or name.endswith(('.sqlite', '.enc', '.pem', '.key')):
             raise ValueError('不允许公开的文件路径：' + name)
+        if name in SCREENSHOTS:
+            if not data.startswith(b'\x89PNG\r\n\x1a\n'):
+                raise ValueError('文档截图不是 PNG：' + name)
+            continue
         text = data.decode('utf-8')
         if any(re.search(pattern, text) for pattern in PATTERNS) or any(marker in text for marker in markers):
             raise ValueError('发现个人资源或凭据模式，停止导出；请检查文件：' + name)

@@ -19,11 +19,19 @@ class PublicExportTests(unittest.TestCase):
             self.assertTrue((root/'desktop/macos/main.swift').is_file())
             self.assertTrue((root/'scripts/tracker_hub.py').is_file())
             self.assertTrue((root/'standalone/operations/server.py').is_file())
+            for name in public.SCREENSHOTS:
+                self.assertEqual((root/name).read_bytes(), (public.ROOT/name).read_bytes())
     def test_private_resource_token_and_path_are_blocked(self):
         for text in ('gh'+'p_'+'x'*35,'https://'+'private-team'+'.feishu.cn/base/ExampleResource'):
             with self.assertRaises(ValueError):public.audit({'test.py':text.encode()})
         with self.assertRaises(ValueError):public.audit({'test.py':b'fixturePrivateMarker'},['fixturePrivateMarker'])
         with self.assertRaises(ValueError):public.audit({'.local/config.json':b'fixture'})
+    def test_screenshot_whitelist_does_not_allow_other_binary_content(self):
+        for name in public.SCREENSHOTS:
+            with self.assertRaises(ValueError): public.audit({name:b'not an image'})
+        with self.assertRaises(ValueError): public.audit({'.local/overview.png':b'fixture'})
+        with self.assertRaises(UnicodeDecodeError): public.audit({'unexpected.bin':b'\xff\x00'})
+
     def test_existing_content_is_preserved(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/'keep').write_text('keep')
