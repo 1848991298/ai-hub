@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {channels,downloads,reviews} from './oppo-data.mjs';
+const info={app_id:'37892440',pkg_name:'com.jryx.isho',version_id:2,version_name:'1.0.2',version_code:'25229',audit_status_name:'审核不通过',refuse_reason_with_sugg:[{reason:'需要补充硬件测试材料'}],app_key:'never exported',test_account:[{password:'never exported'}]};
+const versions=[{app_id:37892440,version_id:2,create_time:'2026-10-29 18:00:00',version_state:'初始'},{app_id:37892440,version_id:1,version_name:'1.0.0',version_code:'25224',version_state:'上架',online_time:'2026-10-29 10:00:00'}];
+test('被驳回的提审版本不覆盖线上版本，认证和测试账号不输出',()=>{const v=channels(info,versions,'2026-10-30');assert.equal(v.live_version,'1.0.0');assert.equal(v.pending_version,'1.0.2');assert.equal(v.status,'rejected');assert.ok(!JSON.stringify(v).includes('never exported'));});
+test('其他产品或未知审核状态必须停止解析',()=>{assert.throws(()=>channels({...info,pkg_name:'other'},versions,'2026-10-30'));assert.throws(()=>channels(info,[{...versions[1],app_id:123}],'2026-10-30'));assert.throws(()=>channels({...info,audit_status_name:'新状态'},versions,'2026-10-30'));});
+test('只使用真实下载列表，不由图表补零；净下载和更新下载分开',()=>{assert.deepEqual(downloads([]),[]);assert.equal(downloads([{dt:'2026-10-29',pure_dl:'930',update_dl:'4'}])[0].downloads,930);assert.throws(()=>downloads([{dt:'2026-10-29',pure_dl:''}]));});
+test('长评论 ID 保持字符串，不带昵称、设备和账号',()=>{const v=reviews([{ID:'1322865361906393088',appId:37892440,CREATE_TIME:'2026-10-30 09:00:00',USER_GRADE:5,PM_WORD:'谢谢',nickname:'private',MOBILE_NAME:'private'}])[0];assert.equal(v.external_id,'1322865361906393088');assert.ok(!JSON.stringify(v).includes('private'));assert.throws(()=>reviews([{ID:1322865361906393088,appId:37892440}]));});

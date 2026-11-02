@@ -1,0 +1,92 @@
+# ISHO 运营大屏
+
+从 AI Hub 独立导出的应用运营源码，固定产品 `com.jryx.isho`。不需要安装 AI Hub，也不读取个人规则、技能、工程、AI 用量或飞书台账。
+
+支持版本与审核进度、下载趋势、用户评价、CSV 导入导出，以及独立采集 / 共享服务器模式切换。这是源码项目，不是免环境安装包；首次需要安装依赖。
+
+## Mac 上快速使用
+
+1. 安装 Python 3.9+、Node.js 22.12+。已有符合版本的环境可跳过；使用 Homebrew 的同事可运行：
+
+   ```bash
+   brew install python@3.12 node@22
+   ```
+
+2. 在 GitHub 点击 **Code → Download ZIP** 并解压，或克隆仓库。终端进入解压后的项目目录，然后运行：
+
+   ```bash
+   bash setup.command
+   ```
+
+   首次初始化会下载前端依赖、Playwright 1.64.1 和 Chromium，需要联网。
+
+3. 运行：
+
+   ```bash
+   bash start.command
+   ```
+
+   浏览器会打开 `http://127.0.0.1:4321`。也可双击 `start.command`；关闭终端或按 `Control+C` 停止服务。端口占用时运行 `bash start.command --port 4322`。不要关闭原有占用程序来强行启动。
+
+## 两种数据模式
+
+### 独立采集
+
+默认模式。本机数据库为空，不携带作者的运营记录。点击商店连接中的登录按钮，在新开的官方窗口里自行登录对应开发者账号，完成必要的扫码、验证码和团队选择。
+
+目前 OPPO、vivo、小米已实现版本 / 审核、下载与评论的只读采集；荣耀和应用宝保留独立入口，实际可用字段以登录权限与适配器为准，不代表全部平台已接通。采集器仍固定查询 ISHO 包名，并非任意 App 通用采集器。
+
+账号有对应 ISHO 查询权限后才能取得真实数据。服务运行期间，每 30 分钟同步已经启用的渠道；关机、休眠、关闭服务时不采集。平台登录过期需要在官方窗口补登。下载、更新、安装次数、评分数量与文字评论数分别处理；未知值不填 0。不自动上传、提审、发布或回复评论。
+
+### 共享服务器
+
+点击顶部“共享服务器”或“服务器设置”，填写已经部署的运营服务 HTTPS 地址及分配的访问凭据：
+
+- `screen`：只读查看。
+- `admin`：管理记录。
+
+这两个账号是运营服务账号，不是商店账号。首次没有服务器时继续用独立模式即可。
+
+切换至共享模式会暂停本机采集；有采集 / 登录任务进行时，先完成或关闭官方窗口再切换。切回独立模式保留本机原来的数据和自动开关。两种模式不会自动复制、上传或合并数据库；连接失败会报错，不回退到本机旧数据。
+
+所有同事配置同一个服务器，即可查看同一份服务器记录。提供的服务器是网页 / 数据 API，尚不包含云端自动登录采集；需要维护者另行接入服务器的数据采集或入库任务，不能把“部署网页”当作“云端采集完成”。
+
+## 数据与凭据存放
+
+- `.local/market.sqlite`：本机运营记录与修改历史。
+- `.local/connection.json`：模式与共享服务器配置，含访问凭据；仅当前用户可读（600），不要发给其他人。
+- `.local/market-browser/`：各商店隔离登录资料。认证检查点为本机密文，密钥使用 Mac 登录钥匙串，命名空间与 AI Hub 分开。
+- `.local/market-collector.json`：自动同步开关。
+
+`.local/`、数据库、认证文件、环境文件和依赖都已忽略，不进入 Git。备份 SQLite 请用 `.backup`，或停止服务后再复制；不要直接复制正在写入的数据库。同事必须自行登录商店，不复制其他人的浏览器资料或钥匙串。
+
+## 可选：部署共享服务
+
+服务器有 Docker Compose 时，在服务器上创建私有环境文件（不上传 Git）：
+
+```text
+MARKET_PASSWORD=至少20字符的管理员随机密码
+MARKET_VIEW_PASSWORD=另一个至少20字符的只读随机密码
+MARKET_PUBLIC_ORIGIN=https://你的实际域名
+```
+
+在项目目录运行：
+
+```bash
+docker compose --env-file /安全路径/market.env -f deploy/compose.yaml up -d --build
+```
+
+服务只映射服务器本机 `127.0.0.1:4320`。请使用现有 Nginx / Caddy 配置 HTTPS 反向代理，保留原始 `Host`、`Origin`、`Authorization` 请求头。服务使用 HTTP Basic 认证，不要将明文 HTTP 账号直接暴露公网。数据在 Docker volume 中。没有域名与实际部署验收前，不表示共享服务已经上线。
+
+## 更新与验证
+
+更新代码前备份 `.local/` 并保护本机改动；拉取或重新下载源码后重新运行 `bash setup.command`。全新下载目录会使用全新本地数据，不会自动寻找旧项目目录。
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+PYTHONPATH=scripts python3 -m unittest discover -s scripts -p 'test_market*hub.py'
+node --test scripts/market-browser/test-*.mjs
+npm --prefix ui run build
+```
+
+本项目不包含任何作者账号、个人数据库、AI Hub 全局规则、个人技能或本机工程清单。源码的公开 / 私有范围由仓库拥有者决定；未附开源许可证时，不代表授予公开再分发授权。

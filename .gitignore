@@ -1,0 +1,12 @@
+.local/
+node_modules/
+ui/dist/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+*.sqlite*
+*.enc

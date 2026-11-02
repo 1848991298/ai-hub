@@ -1,0 +1,21 @@
+services:
+  market:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4320:4320"
+    environment:
+      MARKET_PASSWORD: ${MARKET_PASSWORD:?请设置管理员密码}
+      MARKET_VIEW_PASSWORD: ${MARKET_VIEW_PASSWORD:?请设置只读密码}
+      MARKET_PUBLIC_ORIGIN: ${MARKET_PUBLIC_ORIGIN:?请配置 HTTPS 源地址}
+    volumes:
+      - market-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  market-data:
