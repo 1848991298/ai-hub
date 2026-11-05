@@ -16,6 +16,7 @@ TEMPLATES = ('README.md', 'RULE.md', 'inventory.md', 'manifest.tsv', 'setup.comm
              'tracker-config.example.json', 'rules/global.md', 'rules/cursor-bootstrap.md',
              'rules/agents-bootstrap.md', 'skills/README.md', 'ui/projects.json',
              'docs/portability.md', 'docs/market-operations.md')
+PUBLIC_SKILLS = ('skills/commit-by-business/SKILL.md',)
 TOP = ('.gitignore', '.dockerignore', 'ui/index.html', 'ui/market.html', 'ui/package.json',
        'ui/package-lock.json', 'ui/vite.config.js', 'scripts/pull.sh', 'scripts/cursor_rules.applescript',
        'scripts/usage-tools/package.json', 'scripts/usage-tools/package-lock.json')
@@ -32,6 +33,7 @@ def source_files():
     files = [(ROOT / name, name) for name in (*TOP, *SCREENSHOTS)]
     template_root = ROOT / 'distribution/public'
     files += [((template_root if template_root.is_dir() else ROOT) / name, name) for name in TEMPLATES]
+    files += [(template_root / name, name) for name in PUBLIC_SKILLS]
     files += [(p, p.relative_to(ROOT).as_posix()) for p in sorted((ROOT / 'scripts').glob('*.py'))]
     for directory in ('ui/src', 'desktop/macos', 'deploy/market', 'scripts/market-browser', 'standalone/operations', 'distribution/public'):
         for path in sorted((ROOT / directory).rglob('*')):

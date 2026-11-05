@@ -11,10 +11,14 @@ class PublicExportTests(unittest.TestCase):
             root=Path(temp)/'public';count=public.export(root)
             files=[p for p in root.rglob('*') if p.is_file()]
             self.assertEqual(count,len(files))
-            self.assertEqual(list((root/'skills').iterdir()),[root/'skills/README.md'])
+            self.assertEqual({p.relative_to(root/'skills').as_posix() for p in (root/'skills').rglob('*') if p.is_file()},
+                             {'README.md','commit-by-business/SKILL.md'})
+            self.assertEqual((root/'skills/commit-by-business/SKILL.md').read_bytes(),
+                             (public.ROOT/'distribution/public/skills/commit-by-business/SKILL.md').read_bytes())
             self.assertFalse((root/'rules/clients').exists())
             self.assertFalse((root/'.local').exists())
-            self.assertFalse(any(line.startswith('canonical\t') for line in (root/'manifest.tsv').read_text().splitlines()))
+            self.assertEqual([line.split('\t')[1] for line in (root/'manifest.tsv').read_text().splitlines() if line.startswith('canonical\t')],
+                             ['commit-by-business'])
             self.assertEqual([p['id'] for p in json.loads((root/'ui/projects.json').read_text())],['hub'])
             self.assertTrue((root/'desktop/macos/main.swift').is_file())
             self.assertTrue((root/'scripts/tracker_hub.py').is_file())
@@ -37,5 +41,18 @@ class PublicExportTests(unittest.TestCase):
             root=Path(temp);(root/'keep').write_text('keep')
             with self.assertRaises(ValueError):public.export(root)
             self.assertEqual((root/'keep').read_text(),'keep')
+
+    def test_missing_generic_skill_never_falls_back_to_personal_skill(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source=Path(temp)/'source'
+            private=source/'skills/commit-by-business/SKILL.md'
+            private.parent.mkdir(parents=True)
+            private.write_text('private skill that must not be published')
+            target=Path(temp)/'public'
+            with patch.object(public,'ROOT',source), patch.object(public,'TOP',()), \
+                 patch.object(public,'SCREENSHOTS',()), patch.object(public,'TEMPLATES',()):
+                with self.assertRaisesRegex(ValueError,'来源缺失'):
+                    public.export(target)
+            self.assertFalse(target.exists())
 
 if __name__=='__main__':unittest.main()

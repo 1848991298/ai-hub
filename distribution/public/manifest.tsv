@@ -1,3 +1,4 @@
 # status	name	origin
-# 公开版不预装个人固定技能。新增时写入 skills/<name>/SKILL.md，并登记：
+# 公开版仅预装已审核的通用技能，不包含作者个人技能配置。新增时登记：
 # canonical<TAB>技能名称<TAB>来源说明
+canonical	commit-by-business	generic-public
