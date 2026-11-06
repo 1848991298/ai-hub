@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Hub 工作台：来源只读、本机偏好与登记单独保存；工程操作仅开放固定目录选择与 SourceTree 入口。"""
+"""AI Hub 工作台：本机目录登记、Git 浏览、规则与偏好管理。"""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 import webbrowser
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from usage_hub import UsageService
@@ -178,7 +178,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
-        path = urlsplit(self.path).path
+        url = urlsplit(self.path)
+        path = url.path
         if not self.is_local_host():
             self.send_error(403)
             return
@@ -194,6 +195,16 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == '/api/projects/capabilities':
             self.send_json(project_service().capabilities())
+            return
+        git_view = re.fullmatch(r'/api/projects/([a-zA-Z0-9_-]+)/git/(history|files|changes|diff)', path)
+        if git_view:
+            try:
+                query = parse_qs(url.query, keep_blank_values=True, max_num_fields=3)
+                self.send_json(project_service().git_view(*git_view.groups(), query))
+            except ProjectError as error:
+                self.send_json({'error': str(error)}, status=error.status)
+            except ValueError:
+                self.send_json({'error': 'Git 浏览参数无效。'}, status=400)
             return
         if path.startswith('/api/projects/') and path.endswith('/branches') and len(path.split('/')) == 5:
             try:

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FolderOpen, FolderGit2, GitBranch, Check, RefreshCw, ArrowUpRight, LoaderCircle, HardDrive } from 'lucide-react';
+import { FolderOpen, Check, ArrowUpRight, LoaderCircle } from 'lucide-react';
 import './projects.css';
 
 async function request(path, body) {
@@ -52,34 +52,4 @@ export function ProjectAdd({ onAdded, onExisting }) {
     </>}
     {!candidate && <p className="caption">支持 Git 仓库、工作树和普通工程目录。所选目录保持原位置。</p>}
   </form>;
-}
-
-export function ProjectBranches({ projectId, notify }) {
-  const [data,setData]=useState(null), [error,setError]=useState(''), [tab,setTab]=useState('worktrees'), [query,setQuery]=useState(''), [opening,setOpening]=useState(false);
-  async function load(){try{setData(await request(`/api/projects/${encodeURIComponent(projectId)}/branches`));setError('');}catch(failure){setError(failure.message);}}
-  useEffect(()=>{load();},[projectId]);
-  async function open(worktreeId) {
-    setOpening(true);setError('');
-    try{await request('/api/projects/open-sourcetree',{project_id:projectId,...(worktreeId?{worktree_id:worktreeId}:{})});notify('已请求 SourceTree 打开对应工作区');}
-    catch(failure){setError(failure.message);}finally{setOpening(false);}
-  }
-  if(!data)return <div className="modal-body"><p role="status">{error || '正在读取分支与工作树…'}</p><button className="button" onClick={load}><RefreshCw size={14}/>重新读取</button></div>;
-  const project=data.project, match=value=>value.toLowerCase().includes(query.trim().toLowerCase());
-  const trees=data.worktrees.filter(tree=>match(tree.branch+' '+tree.path));
-  const branches=data.branches.filter(branch=>branch.remote===(tab==='remote') && match(branch.name));
-  return <div className="modal-body project-branches">
-    <div className="project-repository-header"><span className="resource-icon blue"><FolderGit2 size={23}/></span><div><h3>{project.name}</h3><code>{project.path}</code></div><button className="button" disabled={opening || !data.capabilities.sourcetree} onClick={()=>open()}>在 SourceTree 打开<ArrowUpRight size={14}/></button></div>
-    <div className="project-repository-meta"><span><GitBranch size={14}/>{project.branch || '分支待核实'}</span><span>{project.changes===null?'工作区状态待核实':project.changes?`${project.changes} 项未提交改动`:'当前工作区整洁'}</span><span>{project.platform}</span></div>
-    <p className="caption project-source-explanation">{project.platform_source}{project.registered_platform && project.registered_platform!==project.platform?` · 原登记：${project.registered_platform}`:''}</p>
-    {!!project.remotes.length && <details className="project-remotes"><summary>远端来源 · {project.remotes.length} 项</summary>{project.remotes.map((remote,index)=><div key={remote.name+index}><strong>{remote.name}</strong><span>{remote.platform}</span><code>{remote.host || '地址类型待识别'}{remote.repository?` / ${remote.repository}`:''}</code></div>)}</details>}
-    {error && <p className="project-message" role="alert">{error}</p>}
-    {!data.capabilities.sourcetree && <p className="project-message">未检测到 SourceTree；安装后可从这里打开仓库。</p>}
-    <div className="project-branch-toolbar"><div className="segmented" role="group" aria-label="分支视图">{[['worktrees',`工作树 ${data.worktrees.length}`],['local','本地分支'],['remote','远端跟踪']].map(([id,label])=><button key={id} aria-pressed={tab===id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</div><input aria-label="搜索分支或工作树" placeholder="搜索分支或路径…" value={query} onChange={event=>setQuery(event.target.value)}/></div>
-    <div className="project-branch-list">
-      {tab==='worktrees'?trees.map(tree=><div className="project-tree-row" key={tree.id}><HardDrive size={17}/><div><strong>{tree.branch}{tree.current && <span className="badge sage">当前目录</span>}{tree.locked && <span className="badge">已锁定</span>}</strong><code>{tree.path}</code>{(!tree.exists || tree.prunable) && <small>目录不可用</small>}</div><button className="button" disabled={opening || !data.capabilities.sourcetree || !tree.exists || tree.prunable} onClick={()=>open(tree.id)}>SourceTree<ArrowUpRight size={13}/></button></div>):branches.map(branch=><div className="project-tree-row" key={branch.ref}><GitBranch size={16}/><div><strong>{branch.name}{branch.current && <Check size={14}/>}</strong><small>{branch.head}{branch.worktree_ids.length?` · ${branch.worktree_ids.length} 个工作树使用中`:''}</small></div><button className="text-button" disabled={opening || !data.capabilities.sourcetree} onClick={()=>open(branch.worktree_ids[0])}>查看仓库<ArrowUpRight size={13}/></button></div>)}
-      {!(tab==='worktrees'?trees.length:branches.length) && <p className="project-list-empty">{query?'没有匹配结果。':'暂无对应记录。'}</p>}
-    </div>
-    <div className="project-branches-footer"><span>在 SourceTree 中切换分支。远端跟踪来自本机记录，可能尚未更新。</span><button className="text-button" onClick={load}><RefreshCw size={13}/>重新读取</button></div>
-    {data.truncated && <p className="caption">当前展示前 500 个分支，完整列表可在 SourceTree 查看。</p>}
-  </div>;
 }

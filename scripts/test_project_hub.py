@@ -96,6 +96,63 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(self.command('branch','--show-current').strip(),'main')
         self.assertTrue(any(tree['path']==str(worktree.resolve()) for tree in details['worktrees']))
 
+    def test_git_view_reads_alternate_ref_history_and_commit_rename_without_checkout(self):
+        original = self.repo / 'package.json'
+        original.write_text('old line\n' + 'shared line\n' * 12)
+        self.command('add', 'package.json')
+        self.command('commit', '-m', '起始提交')
+        main = self.command('rev-parse', 'HEAD').strip()
+        tree = self.root / 'feature'
+        self.command('worktree', 'add', '-b', 'feature/diff', str(tree))
+        self.command('-C', str(tree), 'mv', 'package.json', '新 名.json')
+        (tree / '新 名.json').write_text('new line\n' + 'shared line\n' * 12)
+        self.command('-C', str(tree), 'add', '--', '新 名.json')
+        self.command('-C', str(tree), 'commit', '-m', '重命名并修改')
+        project_id = self.register()['id']
+        branch = next(item for item in self.service.details(project_id)['branches'] if item['name'] == 'feature/diff')
+        history = self.service.git_view(project_id, 'history', {'head': [branch['oid']], 'offset': ['0']})
+        self.assertEqual([row['title'] for row in history['commits']], ['重命名并修改', '起始提交'])
+        query = {'commit': [branch['oid']]}
+        file, = self.service.git_view(project_id, 'files', query)['files']
+        self.assertEqual((file['path'], file['previous_path'], file['status'][0]), ('新 名.json', 'package.json', 'R'))
+        patch = self.service.git_view(project_id, 'diff', {**query, 'file': [file['id']]})['patch']
+        self.assertIn('-old line\n+new line', patch)
+        root_file, = self.service.git_view(project_id, 'files', {'commit': [main]})['files']
+        self.assertEqual(root_file['status'], 'A')
+        self.assertEqual(self.command('rev-parse', 'HEAD').strip(), main)
+        self.assertEqual(self.command('status', '--porcelain'), '')
+
+    def test_git_view_separates_worktree_diffs_and_only_reads_listed_paths(self):
+        self.command('add', 'package.json')
+        self.command('commit', '-m', 'baseline')
+        tracked = self.repo / 'package.json'
+        tracked.write_text('staged\n')
+        self.command('add', 'package.json')
+        tracked.write_text('unstaged\n')
+        (self.repo / 'new [file].txt').write_text('untracked\n')
+        outside = self.root / 'outside'
+        outside.write_text('outside content')
+        (self.repo / 'link').symlink_to(outside)
+        project_id = self.register()['id']
+        worktree = self.service.details(project_id)['worktrees'][0]['id']
+        query = {'worktree': [worktree]}
+        before = self.command('status', '--porcelain')
+        groups = self.service.git_view(project_id, 'changes', query)
+
+        def diff(group, file):
+            return self.service.git_view(project_id, 'diff', {**query, 'group': [group], 'file': [file]})['patch']
+
+        self.assertIn('+staged\n', diff('staged', groups['staged'][0]['id']))
+        self.assertIn('-staged\n+unstaged\n', diff('unstaged', groups['unstaged'][0]['id']))
+        new_files = {file['path']: file['id'] for file in groups['untracked']}
+        self.assertIn('+untracked\n', diff('untracked', new_files['new [file].txt']))
+        self.assertEqual(diff('untracked', new_files['link']), '')
+        with self.assertRaises(projects.ProjectError):
+            diff('untracked', '../outside')
+        with self.assertRaises(projects.ProjectError):
+            self.service.git_view(project_id, 'history', {'head': ['--all'], 'offset': ['0']})
+        self.assertEqual(self.command('status', '--porcelain'), before)
+
     def test_open_client_only_accepts_registered_ids_and_fixed_arguments(self):
         entry=self.register()
         with self.assertRaises(projects.ProjectError):self.service.open_sourcetree({'project_id':'../other'})
