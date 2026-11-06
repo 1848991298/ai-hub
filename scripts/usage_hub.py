@@ -108,7 +108,7 @@ def normalize_ccusage(payload, window, timestamp):
         priced = bool(models) and all(not model['fallback_pricing'] for model in models)
         daily.append({'date': key, **token_mix(row, 'exclusive'), 'estimated_usd': number(row.get('costUSD')) if priced else None,
                       'metered_usd': None, 'pricing_complete': priced, 'models': models})
-    return {'state': 'ready', 'source': 'ccusage 20.0.45 · 本地日志', 'scope': '本机保留的 Codex 记录，不含未落盘的云端或其他设备任务',
+    return {'state': 'ready', 'source': f'ccusage {ccusage_version()} · 本地日志', 'scope': '本机保留的 Codex 记录，不含未落盘的云端或其他设备任务',
             'updated_at': timestamp, 'reason': None, 'daily': sorted(daily, key=lambda r: r['date']),
             'coverage_mode': 'all_available',
             'note': '读取本机仍保留的全部日记录；API 等价费用估算，未知或回退定价不计入，reasoning 已含在输出中。'}
@@ -211,6 +211,43 @@ def run_json(arguments, timeout):
     except (ValueError, TypeError):
         # 不把 CLI stderr、认证字段或未知原文透传进页面和缓存。
         raise CollectorError('采集器未返回可读统计，请检查登录或工具版本。')
+
+
+def ccusage_version():
+    candidates = [Path(__file__).resolve().parent / 'usage-tools/package.json']
+    root = os.environ.get('AI_HUB_ROOT')
+    if root:
+        candidates.append(Path(root).expanduser() / 'scripts/usage-tools/package.json')
+    for path in candidates:
+        try:
+            version = json.loads(path.read_text()).get('dependencies', {}).get('ccusage')
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(version, str) and version:
+            return version.lstrip('=')
+    return 'unknown'
+
+
+def detected_sources(root):
+    home = Path.home()
+    sources = []
+    if (home / '.codex').is_dir():
+        sources.append({'id': 'codex', 'label': 'Codex', 'used': True, 'detail': f'本机有 Codex 记录，每日用量继续用 ccusage {ccusage_version()} 读取'})
+    else:
+        sources.append({'id': 'codex', 'label': 'Codex', 'used': False, 'detail': '本机没有 Codex 数据目录，不接入'})
+    if executable(root, 'codexbar'):
+        sources.append({'id': 'cursor', 'label': 'Cursor', 'used': True, 'detail': '本机有 CodexBar，额度和每日明细继续走它'})
+    else:
+        sources.append({'id': 'cursor', 'label': 'Cursor', 'used': False, 'detail': '本机没有 CodexBar，不接入 Cursor 额度'})
+    for label, folder in (('Claude', '.claude'), ('Gemini', '.gemini'), ('Copilot', '.copilot'), ('Grok', '.grok')):
+        path = home / folder
+        if not path.is_dir():
+            sources.append({'id': label.lower(), 'label': label, 'used': False, 'detail': '本机没有数据目录，不接入'})
+            continue
+        has_usage = any(item.is_file() and 'auth' not in item.name.lower() and item.suffix in {'.jsonl', '.sqlite', '.log'} for item in path.rglob('*'))
+        sources.append({'id': label.lower(), 'label': label, 'used': False,
+                        'detail': '有用量文件，但当前没有接入读取器' if has_usage else '没有用量记录，不接入'})
+    return sources
 
 
 def executable(root, name):

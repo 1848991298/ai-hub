@@ -23,7 +23,7 @@ class MemoryClient:
         row = {
             'id': 'rec' + str(len(self.creates)), 'kind': kind, 'content': fields['内容'], 'status': fields['状态'],
             'created_at': '2026-11-01 17:00', 'due': fields['截止时间'][:10] if fields.get('截止时间') else None,
-            'priority': fields.get('优先级'), 'note': fields.get('备注') or '',
+            'priority': fields.get('优先级'), 'note': fields.get('备注') or '', 'tags': list(fields.get('标签') or []),
         }
         self.rows[kind].append(row)
         return row['id']
@@ -39,12 +39,13 @@ class MemoryClient:
                 if '优先级' in fields: row['priority'] = fields['优先级']
                 if '截止时间' in fields: row['due'] = None if fields['截止时间'] is None else fields['截止时间'][:10]
                 if '备注' in fields: row['note'] = fields['备注']
+                if '标签' in fields: row['tags'] = list(fields['标签'] or [])
                 return
         raise TrackerError('飞书里已经没有这条记录。', 404)
 
 
 def sample(record_id='recFixtureIssue', due='2026-11-01'):
-    return {'id': record_id, 'kind': 'issue', 'content': '模拟问题', 'status': '未启动', 'created_at': '2026-11-01 16:31', 'due': due, 'priority': 'P1', 'note': '模拟'}
+    return {'id': record_id, 'kind': 'issue', 'content': '模拟问题', 'status': '未启动', 'created_at': '2026-11-01 16:31', 'due': due, 'priority': 'P1', 'note': '模拟', 'tags': []}
 
 
 class TrackerTests(unittest.TestCase):
@@ -55,19 +56,21 @@ class TrackerTests(unittest.TestCase):
         self.service = TrackerService(self.client, Path(self.tmp.name))
 
     def test_real_column_order_does_not_decide_fields(self):
-        issue_ids = [TABLES['issue']['fields'][name] for name in ('content','created','status','priority','due','note')]
-        issue = ['示例问题内容', '2026-11-01T16:31:54.000+08:00', ['未启动'], ['P1'], '2026-11-02T00:00:00.000+08:00', '模拟']
+        issue_ids = [TABLES['issue']['fields'][name] for name in ('content','created','status','priority','due','note','tags')]
+        issue = ['示例问题内容', '2026-11-01T16:31:54.000+08:00', ['未启动'], ['P1'], '2026-11-02T00:00:00.000+08:00', '模拟', ['充电仓', 'TSDB']]
         row = normalize('issue', issue_ids, 'recFixtureIssue', issue)
         self.assertEqual(row['content'], '示例问题内容')
         self.assertEqual(row['created_at'], '2026-11-01 16:31')
         self.assertEqual(row['due'], '2026-11-02')
         self.assertEqual(row['priority'], 'P1')
-        task_ids = [TABLES['task']['fields'][name] for name in ('content','note','status','created','due','priority')]
-        task = ['任务内容', '备注文字', ['未启动'], '2026-11-01T16:35:07.000+08:00', None, ['P2']]
+        self.assertEqual(row['tags'], ['充电仓', 'TSDB'])
+        task_ids = [TABLES['task']['fields'][name] for name in ('content','note','status','created','due','priority','tags')]
+        task = ['任务内容', '备注文字', ['未启动'], '2026-11-01T16:35:07.000+08:00', None, ['P2'], []]
         parsed = normalize('task', task_ids, 'recFixtureTask', task)
         self.assertEqual(parsed['note'], '备注文字')
         self.assertIsNone(parsed['due'])
         self.assertEqual(parsed['priority'], 'P2')
+        self.assertEqual(parsed['tags'], [])
 
     def test_create_defaults_and_empty_due_are_not_invented(self):
         result = self.service.create({'kind': 'task', 'client_request_id': 'abc12345-def', 'content': '  新任务  ', 'priority': '', 'due': ''})

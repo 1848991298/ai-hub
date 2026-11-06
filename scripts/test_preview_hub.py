@@ -53,7 +53,21 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertEqual(data['skills'][0]['description'], '一个测试技能')
         self.assertEqual(len(data['skills'][0]['mappings']), 3)
-        self.assertTrue(all(c['session_state'] == '待核实' for c in data['clients']))
+        self.assertEqual((data['skills'][0]['title'], data['skills'][0]['category']), ('正文', '其他'))
+
+    def test_skill_category_comes_from_manifest(self):
+        (self.root / 'manifest.tsv').write_text('canonical\texample\ttest\t工程协作\tgit\n')
+        with patch.object(preview, 'git', return_value=''):
+            skill = preview.snapshot()['skills'][0]
+        self.assertEqual((skill['category'], skill['icon']), ('工程协作', 'git'))
+
+    def test_profile_uses_system_name_until_saved(self):
+        with patch.object(preview, 'system_name', return_value='Leo'):
+            self.assertEqual(preview.profile(), {'name': 'Leo', 'mark': 'L', 'subtitle': ''})
+            saved = preview.save_profile({'name': '示例用户', 'mark': '示', 'subtitle': '构建自己的工作方式', 'extra': 'no'})
+        self.assertEqual(saved['mark'], '示')
+        self.assertNotIn('extra', (self.root / '.local/profile.json').read_text())
+        self.assertEqual(preview.redact('token=abc.def'), 'token=[已隐藏]')
 
     def test_preferences_default_without_creating_local_files(self):
         self.assertEqual(preview.preferences(), {'theme': 'graphite'})
@@ -106,6 +120,30 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(request('POST', '/api/preferences', '{}', local)[0], 501)
         finally:
             server.shutdown(); server.server_close(); worker.join()
+
+    def test_task_context_rejects_stale_revision_and_unattributed_usage(self):
+        path = preview.task_context_path('task', 'recExample')
+        branch, folder = 'example', '/test/repo'
+        value = dict.fromkeys(preview.TASK_CONTEXT_LIMITS, '')
+        value.update(project_id='test', tree_id='a' * 16, branch=branch, path=folder,
+                     source_ref='HEAD', source_sha='a' * 40, delivery='review')
+        body = {'revision': 0, 'context': value}
+        self.assertEqual(preview.task_context(path), {'revision': 0, 'context': None})
+        with patch.object(preview, 'project_service') as service, patch.object(preview, 'project_git', return_value='commit'):
+            service.return_value.worktree_context.return_value = {'path': folder, 'branch': branch}
+            saved = preview.save_task_context(path, body)
+            self.assertEqual(saved['revision'], 1)
+            with self.assertRaisesRegex(preview.ProjectError, '另一窗口'):
+                preview.save_task_context(path, body)
+            body['revision'] = 1
+            value['cursor_tokens'] = '10'
+            with self.assertRaisesRegex(preview.ProjectError, '证据'):
+                preview.save_task_context(path, body)
+            value['cursor_usage_url'] = 'https://example.test/run'
+            value['delivery'] = 'verified'
+            with self.assertRaisesRegex(preview.ProjectError, '验收结果'):
+                preview.save_task_context(path, body)
+        self.assertEqual(preview.task_context(path), saved)
 
     def test_existing_non_repository_is_not_reported_clean(self):
         path = self.root / 'not-a-repo'

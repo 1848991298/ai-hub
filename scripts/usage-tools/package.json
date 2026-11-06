@@ -3,5 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "description": "AI Hub 的可选本地用量采集工具，版本固定",
-  "dependencies": { "ccusage": "20.0.45" }
+  "dependencies": {
+    "ccusage": "20.0.48"
+  }
 }

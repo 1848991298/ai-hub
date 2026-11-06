@@ -2,3 +2,11 @@
 
 .quota-more{font-size:var(--text-xs);color:var(--text-secondary);margin:12px 0}.quota-more summary{cursor:pointer;line-height:1.8}.quota-more[open]{border-top:1px solid var(--border);padding-top:10px}
 .usage-coverage{font-size:var(--text-xs);color:var(--text-muted);line-height:1.8;margin:0 0 15px}.usage-date-range{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:15px;color:var(--text-muted);font-size:var(--text-xs)}.usage-date-range label{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.usage-date-range input{border:1px solid var(--border);background:var(--surface-subtle);color:var(--text);border-radius:6px;padding:7px 9px;font-size:var(--text-sm);font-family:var(--font-ui);min-width:0;max-width:100%}@container(max-width:540px){.usage-controls>.segmented:last-child{max-width:100%;flex-wrap:wrap}.usage-controls>.segmented:last-child button{padding:6px 8px}.usage-date-range label{flex:1;min-width:125px}.usage-date-range input{width:100%}}
+
+.usage-health { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: 1px; margin: 12px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--border); overflow: hidden; }
+.usage-health > section { min-width: 0; padding: 12px 14px; background: var(--surface); }
+.usage-health header { display: flex; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.usage-health small, .usage-health p { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.usage-health p { margin-top: 5px; }
+.usage-health-actions { flex-wrap: wrap; }
+.usage-health-actions > span { flex: 1 1 225px; }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, ledgerColumnDefaults, nextSort, sortRecords, changedFields } from './ledger-model.js';
+import { columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, knownTags, ledgerColumnDefaults, moveRow, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
 
 const rows = [
   { id: 'a', content: '过期未结束', status: '未启动', priority: 'P1', due: '2026-10-01', created_at: '2026-10-01 09:00', note: '' },
@@ -59,10 +59,41 @@ test('列宽记住合法值，越界收回默认范围内', () => {
   assert.equal(widths.created, ledgerColumnDefaults.created);
 });
 
+test('标签纳入要同时具备，排除掉带有该标签的记录', () => {
+  const tagged = [
+    { id: 'a', status: '未启动', priority: 'P1', due: '2026-11-08', tags: ['充电仓', 'TSDB'] },
+    { id: 'b', status: '未启动', priority: 'P1', due: '2026-11-08', tags: ['充电仓'] },
+    { id: 'c', status: '进行中', priority: 'P0', due: '2026-11-08', tags: ['安卓'] },
+  ];
+  const both = { ...emptyFilters(), tags: { '充电仓': 'include', TSDB: 'include' } };
+  assert.deepEqual(filterRecords(tagged, both, '2026-11-01').map(row => row.id), ['a']);
+  const hide = { ...emptyFilters(), tags: { '充电仓': 'exclude' } };
+  assert.deepEqual(filterRecords(tagged, hide, '2026-11-01').map(row => row.id), ['c']);
+});
+
+test('手动顺序优先，新记录排在已排过的后面', () => {
+  const rows = [{ id: 'a', created_at: '2026-11-01' }, { id: 'b', created_at: '2026-11-02' }, { id: 'c', created_at: '2026-11-03' }];
+  assert.deepEqual(orderedRows(rows, ['c', 'a']).map(row => row.id), ['c', 'a', 'b']);
+  assert.deepEqual(moveRow(['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'b']);
+  assert.deepEqual(moveRow(['a', 'b'], 'a', 'a'), ['a', 'b']);
+});
+
+test('已有标签合并选项和问题、任务上的标签，并去掉重复', () => {
+  const tags = knownTags({
+    tag_options: ['充电仓', ''],
+    issues: [{ tags: ['充电仓', 'TSDB'] }, { tags: null }],
+    tasks: [{ tags: ['安卓', 'TSDB'] }, {}],
+  });
+  assert.deepEqual(tags, ['充电仓', 'TSDB', '安卓']);
+  assert.deepEqual(knownTags(null), []);
+  assert.deepEqual(knownTags({ issues: [{ tags: ['  ', 1] }] }), []);
+});
+
 test('只提交改动字段，未改表单不会被刷新覆盖', () => {
   const base = { content: '事项', status: '未启动', due: '', priority: 'P2', note: '原备注' };
   const editing = { ...base, note: '正在写' };
   assert.deepEqual(changedFields(base, editing), { note: '正在写' });
+  assert.deepEqual(changedFields({ ...base, tags: ['充电仓'] }, { ...base, tags: ['充电仓', 'TSDB'] }), { tags: ['充电仓', 'TSDB'] });
   assert.deepEqual(changedFields(base, base), {});
   assert.equal(editing.note, '正在写');
 });

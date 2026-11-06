@@ -17,6 +17,11 @@ button,input,textarea{font-family:inherit}code,kbd,pre,.branch-value,.editor-con
 .project-tags>span,.project-platform,.project-card-footer>span,.project-card-footer>span>span{font-size:var(--text-xs)}.project-tags{flex-wrap:wrap}.project-card-top{margin-bottom:13px}
 .skill-name strong,.skills-list.full .skill-name strong{font-size:var(--text-base)}.skill-name code,.skills-list.full .skill-name code,.row-category{font-size:var(--text-xs)}
 .overview-stats>button>span{font-size:var(--text-sm)}.overview-stats small{font-size:var(--text-xs)}.overview-stats strong{flex-wrap:wrap;row-gap:4px}.overview-stats em{margin-left:0}
+.attention{margin-bottom:8px}.overview-empty{margin:0 0 22px}.attention-list{display:flex;flex-direction:column;margin:0 0 22px;border:1px solid var(--border);border-radius:13px;overflow:hidden;background:var(--surface)}
+.attention-list>button{display:flex;align-items:center;gap:16px;width:100%;padding:14px 16px;text-align:left;border-bottom:1px solid var(--border);color:var(--text)}
+.attention-list>button:last-child{border-bottom:0}.attention-list>button>span{display:flex;flex:1;flex-direction:column;gap:3px;min-width:0}.attention-list small{color:var(--text-muted);font-size:var(--text-xs)}
+.skill-row-wrap{display:flex;align-items:center;min-width:0}.skill-row-wrap>.skill-row{flex:1;min-width:0;border-bottom:0}.skills-list .skill-row-wrap{border-bottom:1px solid var(--border)}
+.pin-skill{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;color:var(--text-muted);flex-shrink:0}.pin-skill.is-on{color:var(--accent)}.list-labels{padding-right:34px}
 .page-heading h1{font-size:28px;font-weight:600}.page-heading{margin-bottom:26px}.page-heading p{font-size:var(--text-base)}.heading-actions .button{font-size:var(--text-sm)}
 .row-category{width:74px}.list-labels>span:nth-child(2){width:74px}.source-note{flex-wrap:wrap}.source-note code{font-size:var(--text-xs)}.state-table>div{font-size:var(--text-sm)}
 .panel-resize{position:relative;cursor:col-resize;touch-action:none;user-select:none;z-index:35;outline:none;background:var(--surface);flex-shrink:0}
@@ -49,3 +54,39 @@ button,input,textarea{font-family:inherit}code,kbd,pre,.branch-value,.editor-con
 
 /* 提高全局导航阅读清晰度，保留用户已有的字号设置。 */
 .app{font-weight:500}.app .nav-item{font-weight:600}.app .nav-group,.app .breadcrumb{color:var(--text-secondary);font-weight:550}.app .nav-group{font-size:max(13px,var(--text-xs))}
+
+/* 技能页顶部的读取端：三个客户端目录与映射数。 */
+.client-dots{width:70px}.list-labels>span:last-child{width:70px}
+.reader-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:22px}
+.reader-strip>button{display:flex;align-items:center;gap:10px;min-width:0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface);text-align:left;color:var(--text-secondary)}
+.reader-strip>button:hover{border-color:var(--accent)}
+.reader-strip>button>span:not(.badge){flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.reader-strip strong{color:var(--text);font-weight:600}
+.reader-strip .badge{flex:none;white-space:nowrap;margin:0}
+.reader-strip code{font-size:var(--text-xs);color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@container(max-width:650px){.reader-strip{grid-template-columns:1fr}}
+.settings-profile,.settings-status{display:grid;gap:10px;margin:18px 0}
+.settings-profile h3,.settings-status h3{margin:0}
+.settings-profile label{display:grid;gap:4px;font-size:13px;color:var(--text-secondary)}
+.settings-profile input{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--canvas);color:var(--text)}
+.settings-log{max-height:180px;overflow:auto;margin:0;padding:10px;border-radius:8px;background:var(--canvas);color:var(--text-secondary);font-size:12px;line-height:1.5;white-space:pre-wrap}
+
+.overview-date { display: grid; justify-items: end; gap: 6px; }
+.overview-date > small, .overview-sources { color: var(--muted); font-size: var(--text-xs); }
+.overview-sources { margin-top: 24px; }
+.overview-sources summary { cursor: pointer; margin-bottom: 10px; }
+.quick-group-label { padding: 10px 13px 5px; color: var(--muted); font-size: var(--text-xs); }
+.quick-results [role="option"] { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 13px; text-align: left; border-radius: 6px; color: var(--muted); }
+.quick-results [role="option"] > span { min-width: 0; flex: 1; }
+.quick-results [role="option"] strong, .quick-results [role="option"] small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.quick-results [role="option"] strong { color: var(--text); }
+.quick-results [role="option"]:hover, .quick-results [aria-selected="true"] { background: var(--surface-2); color: var(--accent); }
+.quick-empty { padding: 22px 13px; color: var(--muted); }
+
+.project-base { display: block; margin-top: 9px; color: var(--muted); font-size: var(--text-xs); }
+.git-baseline { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 8px 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: var(--text-xs); }
+.git-baseline code { color: var(--text); overflow-wrap: anywhere; }
+.git-worktree-actions { display: flex; align-items: center; gap: 8px; }
+.git-pin[aria-pressed="true"] { color: var(--accent); }
+.git-target-context { display: grid; gap: 3px; min-width: 0; padding: 7px 12px; border-bottom: 1px solid var(--border); font-size: var(--text-xs); color: var(--muted); }
+.git-target-context span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

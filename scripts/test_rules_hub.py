@@ -3,7 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from rules_hub import RulesService, RulesError, digest
+from rules_hub import RulesService, RulesError, digest, plain_title
 
 class FakeCursor:
     def __init__(self, texts):
@@ -30,6 +30,9 @@ class RulesTests(unittest.TestCase):
         self.service=RulesService(self.root,self.home,self.cursor)
     def doc(self,id): return next(d for d in self.service.snapshot()['documents'] if d['id']==id)
     def save(self,id,source): return self.service.save(dict(id=id,source=source,revision=self.doc(id)['revision']))
+    def test_title_drops_markdown_markers(self):
+        self.assertEqual(plain_title('**核心理念与原则**'), '核心理念与原则')
+        self.assertEqual(plain_title('## `lark-cli` 用法'), 'lark-cli 用法')
     def test_get_never_writes_or_uses_cursor(self):
         self.service.snapshot(); self.assertFalse((self.root/'.local').exists());self.assertEqual(self.cursor.writes,[])
     def test_shared_save_visible_to_codex_and_backup(self):

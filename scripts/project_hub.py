@@ -191,6 +191,15 @@ def inspect_project(path):
     return result
 
 
+def development_base(project, configured):
+    if not isinstance(configured, str):
+        return None
+    remote_name, separator, branch = configured.partition('/')
+    if separator and branch and any(remote['name'] == remote_name for remote in project['remotes']):
+        return configured
+    return None
+
+
 def detect_tags(path):
     path = Path(path)
     signatures = [('pubspec.yaml','Flutter / Dart'), ('package.json','JavaScript / TypeScript'), ('Cargo.toml','Rust'),
@@ -228,7 +237,9 @@ class ProjectService:
         return entry
 
     def snapshot(self, entry):
-        return {**entry, 'registered_platform':entry.get('platform'), **inspect_project(self.path(entry))}
+        project = inspect_project(self.path(entry))
+        return {**entry, 'registered_platform': entry.get('platform'), **project,
+                'development_base': development_base(project, entry.get('development_base'))}
 
     def picker(self):
         configured = os.environ.get('AI_HUB_PROJECT_PICKER')
@@ -322,6 +333,16 @@ class ProjectService:
             branches.append(dict(name=name,ref=ref,head=head,oid=oid,remote=remote,current=not remote and name==project['branch'],
                                  worktree_ids=[tree['id'] for tree in trees if not remote and tree['branch']==name]))
         return dict(project=project,branches=branches[:500],truncated=len(branches)>500,worktrees=trees,capabilities=self.capabilities())
+
+    def worktree_context(self, project_id, tree_id):
+        registered = self.path(self.entry(project_id))
+        path = self.git_worktree(registered, tree_id)
+        project = inspect_project(path)
+        if not project['is_git']:
+            raise ProjectError('工作树已不可用，请重新选择。', 409)
+        return dict(path=str(path), branch=project['branch'], changes=project['changes'],
+                    oid=git(path, 'rev-parse', '--verify', 'HEAD'),
+                    upstream=git(path, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'))
 
     def git_view(self, project_id, action, query):
         expected = {

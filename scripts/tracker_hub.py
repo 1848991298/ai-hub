@@ -17,8 +17,8 @@ INTERVAL = 30
 ZONE = ZoneInfo('Asia/Shanghai')
 STATUSES = ('未启动', '进行中', '已结束')
 PRIORITIES = ('P0', 'P1', 'P2')
-NAMES = {'content': '内容', 'status': '状态', 'due': '截止时间', 'priority': '优先级', 'note': '备注'}
-EDITABLE = ('content', 'status', 'due', 'priority', 'note')
+NAMES = {'content': '内容', 'status': '状态', 'due': '截止时间', 'priority': '优先级', 'note': '备注', 'tags': '标签'}
+EDITABLE = ('content', 'status', 'due', 'priority', 'note', 'tags')
 
 
 class TrackerError(Exception):
@@ -62,6 +62,18 @@ def clock_label(value):
     return None
 
 
+def tag_list(value):
+    if value in (None, ''):
+        return []
+    items = value if isinstance(value, list) else [value]
+    names = []
+    for item in items:
+        name = item.get('name') if isinstance(item, dict) else item
+        if isinstance(name, str) and name.strip() and name.strip() not in names:
+            names.append(name.strip())
+    return names
+
+
 def choice(value):
     if isinstance(value, list):
         value = value[0] if value else None
@@ -99,6 +111,7 @@ def normalize(kind, field_ids, record_id, cells):
         'due': date_only(by_id[expected['due']]),
         'priority': priority,
         'note': text_cell(by_id[expected['note']]),
+        'tags': tag_list(by_id.get(expected.get('tags'))),
     }
 
 
@@ -223,6 +236,8 @@ class TrackerService:
                 'boundary': '退出 AI Hub 或本地服务后停止同步，下次打开再补拉。截止时间到期不会把状态改成已结束。',
                 'status_options': list(STATUSES),
                 'priority_options': list(PRIORITIES),
+                'tag_options': self._tag_options(),
+                'tag_fields': {kind: 'tags' in table['fields'] for kind, table in TABLES.items()},
                 'issues': [dict(row) for row in self.rows['issue']],
                 'tasks': [dict(row) for row in self.rows['task']],
             }
@@ -294,6 +309,10 @@ class TrackerService:
         priority = self._priority(body.get('priority'))
         due = self._due(body.get('due'))
         note = self._note(body.get('note'))
+        tags = self._tags(body.get('tags'))
+        if tags and 'tags' not in TABLES[kind]['fields']:
+            raise TrackerError('此表还未配置标签字段。')
+        self._ensure_tags(tags)
         with self.lock:
             seen = self._seen.get(request_id)
             if request_id in self._inflight:
@@ -316,6 +335,8 @@ class TrackerService:
             fields['截止时间'] = due + ' 00:00:00'
         if note:
             fields['备注'] = note
+        if tags:
+            fields['标签'] = tags
         try:
             record_id = self.client.create(kind, fields)
         except TrackerError as error:
@@ -332,7 +353,7 @@ class TrackerService:
         with self.lock:
             row = next((item for item in self.rows[kind] if item['id'] == record_id), None)
         if not row:
-            row = {'id': record_id, 'kind': kind, 'content': content, 'status': status, 'created_at': None, 'due': due, 'priority': priority, 'note': note or ''}
+            row = {'id': record_id, 'kind': kind, 'content': content, 'status': status, 'created_at': None, 'due': due, 'priority': priority, 'note': note or '', 'tags': tags}
         return {'record': row, 'snapshot': self.snapshot(), 'duplicate': False}
 
     def update(self, body):
@@ -346,7 +367,7 @@ class TrackerService:
             raise TrackerError('没有可保存的修改。')
         unknown = set(patch) - set(EDITABLE)
         if unknown or 'created_at' in patch:
-            raise TrackerError('创建时间不能修改，也只能改内容、状态、截止时间、优先级和备注。')
+            raise TrackerError('创建时间不能修改，也只能改内容、状态、截止时间、优先级、备注和标签。')
         self.refresh()
         with self.lock:
             current = self._find(kind, record_id)
@@ -370,6 +391,12 @@ class TrackerService:
                 fields['截止时间'] = None if due is None else due + ' 00:00:00'
             elif key == 'note':
                 fields['备注'] = self._note(value) or ''
+            elif key == 'tags':
+                if 'tags' not in TABLES[kind]['fields']:
+                    raise TrackerError('此表还未配置标签字段。')
+                tags = self._tags(value)
+                self._ensure_tags(tags)
+                fields['标签'] = tags
         if not fields:
             return {'record': current, 'snapshot': self.snapshot(), 'changed': False}
         try:
@@ -424,7 +451,61 @@ class TrackerService:
             raise TrackerError('截止日期请选年月日，或留空。')
         return parsed
 
+    def _tag_options(self):
+        found = []
+        for rows in self.rows.values():
+            for row in rows:
+                for name in row.get('tags') or []:
+                    if name not in found:
+                        found.append(name)
+        return found
+
+    def _ensure_tags(self, names):
+        if not names or all(name in self._tag_options() for name in names):
+            return
+        for kind, table in TABLES.items():
+            if 'tags' in table['fields']:
+                self._ensure_kind_tags(kind, names)
+
+    def _ensure_kind_tags(self, kind, names):
+        table_id = TABLES[kind]['id']
+        field_id = TABLES[kind]['fields']['tags']
+        payload = self.client.invoke(['base', '+field-get', '--base-token', BASE_TOKEN, '--table-id', table_id, '--field-id', field_id])
+        field = (payload.get('data') or {}).get('field') or payload.get('data') or {}
+        options = [dict(item) for item in field.get('options') or [] if isinstance(item, dict) and item.get('name')]
+        have = {item['name'] for item in options}
+        added = False
+        for name in names:
+            if name not in have:
+                options.append({'name': name})
+                have.add(name)
+                added = True
+        if not added:
+            return
+        body = json.dumps({'name': '标签', 'type': 'select', 'multiple': True, 'options': options}, ensure_ascii=False)
+        self.client.invoke(['base', '+field-update', '--base-token', BASE_TOKEN, '--table-id', table_id, '--field-id', field_id, '--json', body, '--yes'])
+
+    def _tags(self, value):
+        if value in (None, '', []):
+            return []
+        if not isinstance(value, list):
+            raise TrackerError('标签需要是一组名称。')
+        clean = []
+        for item in value:
+            if not isinstance(item, str):
+                raise TrackerError('标签需要是文字。')
+            name = item.strip()
+            if not name or len(name) > 16:
+                raise TrackerError('标签请用 1 到 16 个字。')
+            if name not in clean:
+                clean.append(name)
+        if len(clean) > 8:
+            raise TrackerError('一条记录最多 8 个标签。')
+        return clean
+
     def _same(self, key, current, previous):
+        if key == 'tags':
+            return list(current or []) == list(previous or [])
         if key in ('content', 'note'):
             return (current or '') == (previous or '')
         return (current or None) == (previous or None)

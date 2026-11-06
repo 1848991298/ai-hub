@@ -20,6 +20,10 @@ def digest(text):
 def normalized(text):
     return ' '.join(text.split())
 
+def plain_title(text):
+    return text.strip().lstrip('#> ').replace('**', '').replace('`', '').strip() or text
+
+
 def same(a, b):
     return a.rstrip('\n') == b.rstrip('\n')
 
@@ -191,7 +195,7 @@ class RulesService:
                     record = self.state.get('bootstrap', {})
                     state = record.get('status', 'unchecked')
                 else:
-                    title, client = record.get('title', rule_id), 'cursor'
+                    title, client = plain_title(record.get('title', rule_id)), 'cursor'
                     state = record.get('status', 'unchecked')
                 if record and state == 'synced' and not same(source, record.get('synced', '')):
                     state = 'pending'
@@ -201,7 +205,7 @@ class RulesService:
             if not codex_ok and codex_source is not None:
                 docs.append(dict(id='codex-entry', title='Codex 独立全局入口（待整合）', client='codex', path=str(entry), source=codex_source, revision=digest(codex_source), status='conflict', remote=global_path.read_text(), remote_revision=digest(global_path.read_text())))
             return dict(schema_version=1, documents=docs, running=self.running, error=self.error,
-                        checked_at=self.checked_at,
+                        checked_at=self.checked_at, last_verified_at=self.state.get('last_verified_at'),
                         clients=[dict(id='codex', status='synced' if codex_ok else 'conflict' if codex_source is not None else 'pending',
                                       path=str(entry), remote=codex_source if not codex_ok else None,
                                       message='直接读取 Hub 共享正文' if codex_ok else '全局入口缺失或存在独立修改；需修复映射'),
@@ -326,9 +330,10 @@ class RulesService:
                     rule_id = 'cursor-' + uuid.uuid4().hex
                     records[rule_id] = dict(title=text.splitlines()[0][:65], index=i, synced=text, status='synced')
                     self.atomic(self.path(rule_id), text + '\n')
+                self.state['last_verified_at'] = time.strftime('%Y-%m-%dT%H:%M:%S%z')
                 self.persist()
                 self.error = ''
-                self.checked_at = time.strftime('%Y-%m-%dT%H:%M:%S%z')
+                self.checked_at = self.state['last_verified_at']
         except (RulesError, OSError, ValueError, subprocess.SubprocessError) as error:
             with self.lock:
                 self.error = str(error)

@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from usage_hub import UsageService
-from project_hub import ProjectService, ProjectError
+from project_hub import ProjectService, ProjectError, git as project_git
 from rules_hub import RulesService, RulesError
 from market_server import MarketBridge, handle_market
 from tracker_hub import TrackerService, handle_tracker
@@ -25,6 +25,12 @@ from tracker_hub import TrackerService, handle_tracker
 ROOT = Path(os.environ.get('AI_HUB_ROOT', Path(__file__).resolve().parent.parent)).expanduser().resolve()
 THEMES = {'graphite', 'midnight', 'forest', 'plum'}
 PREFERENCES_LOCK = threading.Lock()
+TASK_CONTEXT_LOCK = threading.Lock()
+TASK_CONTEXT_ROUTE = re.compile(r'/api/task-context/(task|issue)/(rec[A-Za-z0-9_-]{1,120})')
+TASK_CONTEXT_LIMITS = {'project_id': 128, 'tree_id': 16, 'path': 4096, 'branch': 512,
+                       'source_ref': 512, 'source_sha': 64, 'scope': 2000, 'acceptance': 2000,
+                       'delivery': 32, 'evidence': 1000, 'codex_tokens': 15, 'codex_usage_url': 1000,
+                       'cursor_tokens': 15, 'cursor_usage_url': 1000}
 USAGE_SERVICE = None
 USAGE_SERVICE_LOCK = threading.Lock()
 PROJECT_SERVICE = None
@@ -58,6 +64,75 @@ def usage_service():
         return USAGE_SERVICE
 
 
+def system_name():
+    try:
+        full = subprocess.run(['id', '-F'], capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        full = ''
+    return full or os.environ.get('USER') or '用户'
+
+
+def profile():
+    fallback = system_name()
+    value = {'name': fallback, 'mark': fallback[:1].upper() or '用', 'subtitle': ''}
+    try:
+        saved = json.loads((ROOT / '.local/profile.json').read_text())
+        if isinstance(saved, dict):
+            value.update({key: saved.get(key, value[key]) for key in value})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return sanitize_profile(value, fallback)
+
+
+def sanitize_profile(value, fallback):
+    name = value.get('name') if isinstance(value.get('name'), str) else ''
+    name = name.strip()[:40] or fallback[:40]
+    mark = value.get('mark') if isinstance(value.get('mark'), str) else ''
+    mark = mark.strip()[:2] or name[:1].upper() or '用'
+    subtitle = value.get('subtitle') if isinstance(value.get('subtitle'), str) else ''
+    return {'name': name, 'mark': mark, 'subtitle': subtitle.strip()[:40]}
+
+
+def save_profile(value):
+    if not isinstance(value, dict):
+        raise ValueError('显示名只接受名字、头像字和一句话')
+    saved = sanitize_profile(value, system_name())
+    directory = ROOT / '.local'
+    directory.mkdir(exist_ok=True)
+    path = directory / 'profile.json'
+    temporary = path.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(saved, ensure_ascii=False) + '\n')
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    return saved
+
+
+def redact(line):
+    return re.sub(r'(?i)(token|secret|password|authorization|cookie)([=: ]+)\S+', r'\1\2[已隐藏]', line)[:240]
+
+
+def diagnostics():
+    def when(path):
+        try:
+            return datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec='seconds')
+        except OSError:
+            return None
+    local = ROOT / '.local'
+    caches = [
+        {'id': 'usage', 'label': '用量缓存', 'detail': '上次成功的日统计。采集失败时保留这份，不把缺失日当成 0。', 'updated': when(local / 'usage-snapshot.json')},
+        {'id': 'market', 'label': '商店数据库', 'detail': '版本、下载和评论。服务开着时每 30 分钟再读商店。', 'updated': when(local / 'market.sqlite')},
+        {'id': 'rules', 'label': '规则同步状态', 'detail': '上次和客户端对过的正文。不是规则本身。', 'updated': when(local / 'rules-state.json')},
+    ]
+    log = Path.home() / 'Library/Logs/AI Hub/service.log'
+    lines = []
+    try:
+        lines = [redact(line) for line in log.read_text(errors='replace').splitlines()[-40:]]
+    except OSError:
+        lines = []
+    from usage_hub import detected_sources
+    return {'caches': caches, 'sources': detected_sources(ROOT), 'log_path': '~/Library/Logs/AI Hub/service.log', 'log': lines}
+
+
 def preferences():
     try:
         value = json.loads((ROOT / '.local/ui-preferences.json').read_text())
@@ -72,17 +147,75 @@ def save_preferences(value):
     if not isinstance(value, dict) or set(value) != {'theme'} or not isinstance(value['theme'], str) or value['theme'] not in THEMES:
         raise ValueError('请选择支持的界面主题')
     with PREFERENCES_LOCK:
-        directory = ROOT / '.local'
-        directory.mkdir(exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=directory, delete=False) as temp:
+        save_local_json(ROOT / '.local/ui-preferences.json', value)
+    return value
+
+
+def save_local_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as temp:
+        temp_path = Path(temp.name)
+        try:
             json.dump(value, temp, ensure_ascii=False)
             temp.write('\n')
-            temp_path = Path(temp.name)
-        try:
-            temp_path.replace(directory / 'ui-preferences.json')
+            temp.flush()
+            temp_path.replace(path)
         finally:
             temp_path.unlink(missing_ok=True)
-    return value
+
+
+def task_context_path(kind, record_id):
+    return ROOT / '.local/task-context' / f'{kind}-{record_id}.json'
+
+
+def task_context(path):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return {'revision': 0, 'context': None}
+
+
+def evidence_url(value):
+    url = urlsplit(value)
+    return url.scheme in ('http', 'https') and url.hostname and not url.username and not url.password
+
+
+def save_task_context(path, body):
+    if not isinstance(body, dict) or set(body) != {'revision', 'context'} or type(body['revision']) is not int:
+        raise ProjectError('执行资料请求格式无效。')
+    value = body['context']
+    if not isinstance(value, dict) or set(value) != set(TASK_CONTEXT_LIMITS) or any(
+            not isinstance(value[key], str) or len(value[key]) > limit for key, limit in TASK_CONTEXT_LIMITS.items()):
+        raise ProjectError('执行资料字段无效或过长。')
+    value = {key: item.strip() for key, item in value.items()}
+    if (not re.fullmatch(r'[A-Za-z0-9_-]+', value['project_id'])
+            or not re.fullmatch(r'[a-f0-9]{16}', value['tree_id'])
+            or not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})', value['source_sha'])
+            or not value['source_ref']):
+        raise ProjectError('请选择已登记工作树和可核实的来源提交。')
+    if value['delivery'] not in ('pending', 'review', 'verified'):
+        raise ProjectError('请选择有效的交付阶段。')
+    if value['delivery'] == 'verified' and (not value['acceptance'] or not value['evidence']):
+        raise ProjectError('标记已验收前请填写验收结果和证据。')
+    if value['evidence'] and not evidence_url(value['evidence']):
+        raise ProjectError('交付证据应使用可访问的 HTTP(S) 链接。')
+    for provider in ('codex', 'cursor'):
+        tokens, evidence = value[provider + '_tokens'], value[provider + '_usage_url']
+        if (tokens or evidence) and (not re.fullmatch(r'[0-9]+', tokens) or not evidence_url(evidence)):
+            raise ProjectError(f'{provider} 任务用量需要非负整数 tokens 和本次任务的证据链接。')
+    project = project_service().worktree_context(value['project_id'], value['tree_id'])
+    if (value['path'], value['branch']) != (project['path'], project['branch']):
+        raise ProjectError('目标工作树的分支或路径已改变，请重新选择。', 409)
+    if project_git(project['path'], 'cat-file', '-t', value['source_sha']) != 'commit':
+        raise ProjectError('本机无法核对来源提交，请重新选择来源。', 409)
+    with TASK_CONTEXT_LOCK:
+        current = task_context(path)
+        if current['revision'] != body['revision']:
+            raise ProjectError('执行资料已被另一窗口更新，请重新打开后核对。', 409)
+        saved = dict(revision=current['revision'] + 1, context=value,
+                     updated_at=datetime.now().astimezone().isoformat(timespec='seconds'))
+        save_local_json(path, saved)
+        return saved
 
 
 def git(path, *args):
@@ -107,25 +240,18 @@ def snapshot():
     with ThreadPoolExecutor(max_workers=4) as pool:
         projects = list(pool.map(project_snapshot, raw_entries))
     skills = []
-    categories = {
-        'adb-wireless-connect': ('设备连接', '无线 ADB 连接', 'terminal'),
-        'sync-isho-main': ('工程协作', '仓库分支同步', 'git'),
-        'sync-isho-ble': ('设备连接', '蓝牙能力同步', 'bluetooth'),
-        'publish-app': ('应用发布', '应用打包与发布', 'package'),
-        'publish-feishu': ('应用发布', '飞书版本通知', 'send'),
-        'weekly-report': ('工作效率', '个人与部门周报', 'file'),
-        'commit-by-business': ('工程协作', '按业务分批提交', 'git'),
-    }
     for line in (ROOT / 'manifest.tsv').read_text().splitlines():
         if not line.startswith('canonical\t'):
             continue
-        _, name, origin = line.split('\t')[:3]
+        _, name, origin, category, icon = (line.split('\t') + ['', ''])[:5]
+        category, icon = category or '其他', icon or 'file'
         path = ROOT / 'skills' / name / 'SKILL.md'
         text = path.read_text()
         front, body = text.split('---', 2)[1:]
         description = re.search(r'^description:\s*(.+?)(?=\n[^\s]|\Z)', front, re.M | re.S)
         description = re.sub(r'\s+', ' ', description.group(1)).strip(' >-\n"') if description else ''
-        category, title, icon = categories.get(name, ('其他', name, 'file'))
+        heading = re.search(r'^# (.+)$', body, re.M)
+        title = heading.group(1).strip() if heading else name
         mappings = []
         for client, location in (('Cursor', '.cursor/skills'), ('Codex', '.codex/skills'), ('Agents', '.agents/skills')):
             target = Path.home() / location / name
@@ -146,21 +272,10 @@ def snapshot():
         parts = line.split('\t', 2)
         if len(parts) == 3:
             history.append(dict(hash=parts[0], message=parts[1], date=parts[2]))
-    codex_entry = Path.home() / '.codex/AGENTS.md'
-    return dict(generated_at=now, hub_root=str(ROOT), mode='规则可保存并同步', preferences=preferences(),
-                projects=projects, skills=skills,
+    return dict(generated_at=now, hub_root=str(ROOT), mode='规则可保存并同步', preferences=preferences(), profile=profile(),
+                projects=projects, skills=skills, features={'task_context': True},
                 rules=dict(path=str(rule_path), source=source, sections=sections, modified=modified(rule_path)),
-                changes=changes, history=history,
-                clients=[
-                    dict(id='cursor', name='Cursor', subtitle='用户规则与个人技能', icon='cursor',
-                         path=str(Path.home() / '.cursor/skills'),
-                         mapped=sum(next(m for m in s['mappings'] if m['client'] == 'Cursor')['mapped'] for s in skills),
-                         rules_state='用户入口待检查', session_state='待核实'),
-                    dict(id='codex', name='Codex', subtitle='全局规则与个人技能', icon='hub',
-                         path=str(Path.home() / '.codex/skills'),
-                         mapped=sum(next(m for m in s['mappings'] if m['client'] == 'Codex')['mapped'] for s in skills),
-                         rules_state='全局入口已映射' if codex_entry.is_symlink() and codex_entry.resolve() == rule_path else '全局入口待检查',
-                         session_state='待核实')])
+                changes=changes, history=history)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -206,6 +321,18 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 self.send_json({'error': 'Git 浏览参数无效。'}, status=400)
             return
+        worktree = re.fullmatch(r'/api/projects/([a-zA-Z0-9_-]+)/worktree/([a-f0-9]{16})', path)
+        context = TASK_CONTEXT_ROUTE.fullmatch(path)
+        if worktree or context:
+            try:
+                value = (project_service().worktree_context(*worktree.groups()) if worktree
+                         else task_context(task_context_path(*context.groups())))
+                self.send_json(value)
+            except ProjectError as error:
+                self.send_json({'error': str(error)}, status=error.status)
+            except (OSError, ValueError):
+                self.send_json({'error': '本机执行资料暂不可读取。'}, status=500)
+            return
         if path.startswith('/api/projects/') and path.endswith('/branches') and len(path.split('/')) == 5:
             try:
                 self.send_json(project_service().details(path.split('/')[3]))
@@ -214,6 +341,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == '/api/preferences':
             self.send_json(preferences())
+            return
+        if path == '/api/profile':
+            self.send_json(profile())
+            return
+        if path == '/api/diagnostics':
+            self.send_json(diagnostics())
             return
         if path == '/api/snapshot':
             try:
@@ -306,22 +439,38 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({'started': started, **service.snapshot()}, status=202)
 
     def do_PUT(self):
-        if urlsplit(self.path).path != '/api/preferences':
+        path = urlsplit(self.path).path
+        context = TASK_CONTEXT_ROUTE.fullmatch(path)
+        if not context and path not in ('/api/preferences', '/api/profile'):
             self.send_error(404)
             return
         if not self.is_local_host() or self.headers.get('Origin') != f'http://{self.headers.get("Host")}':
             self.send_error(403)
             return
+        if context:
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 64 * 1024:
+                    raise ValueError()
+                self.send_json(save_task_context(task_context_path(*context.groups()), json.loads(self.rfile.read(length))))
+            except ProjectError as error:
+                self.send_json({'error': str(error)}, status=error.status)
+            except (ValueError, TypeError):
+                self.send_json({'error': '执行资料请求格式无效。'}, status=400)
+            except OSError:
+                self.send_json({'error': '无法保存本机执行资料，请检查目录权限。'}, status=500)
+            return
         try:
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= 1024:
-                raise ValueError('偏好数据长度不合法')
-            value = save_preferences(json.loads(self.rfile.read(length)))
+                raise ValueError('数据长度不合法')
+            body = json.loads(self.rfile.read(length))
+            value = save_preferences(body) if path == '/api/preferences' else save_profile(body)
         except (ValueError, TypeError):
-            self.send_error(400, 'Unsupported appearance preference')
+            self.send_error(400, 'Unsupported preference')
             return
         except OSError:
-            self.send_error(500, 'Cannot save appearance preference')
+            self.send_error(500, 'Cannot save preference')
             return
         self.send_json(value)
 

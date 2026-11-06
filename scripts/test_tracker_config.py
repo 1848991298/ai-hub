@@ -23,6 +23,17 @@ class TrackerConfigTests(unittest.TestCase):
             path.write_text('{bad')
             token,url,tables,error=load_settings(root)
             self.assertFalse(token);self.assertTrue(error)
+    def test_original_example_accepts_six_fields(self):
+        example = Path(__file__).resolve().parents[1] / 'tracker-config.example.json'
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / '.local/tracker-config.json'
+            path.parent.mkdir()
+            path.write_bytes(example.read_bytes())
+            token, _, tables, error = load_settings(temp)
+            self.assertTrue(token)
+            self.assertIsNone(error)
+            self.assertTrue(all('tags' not in table['fields'] for table in tables.values()))
+
     def test_credentials_and_duplicate_field_ids_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);path=root/'.local/tracker-config.json';path.parent.mkdir()

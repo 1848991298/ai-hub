@@ -26,9 +26,9 @@ export function selectDates(daily, today, mode, start, end) {
   return {dates:recentDates(end,length),error:''};
 }
 
-// 长区间压成最多 60 组；只累计有值的日记录，空组保持缺失。
+// 三个月以内一天一根；更长才合并，且最多 60 组。空组保持缺失，不记成 0。
 export function chartBuckets(dates, daily, metric) {
-  const rows=new Map(daily.map(row=>[row.date,row])), size=Math.max(1,Math.ceil(dates.length/60));
+  const rows=new Map(daily.map(row=>[row.date,row])), size=dates.length<=92?1:Math.max(1,Math.ceil(dates.length/60));
   const result=[];
   for(let offset=0;offset<dates.length;offset+=size) {
     const group=dates.slice(offset,offset+size), values=group.map(day=>rows.get(day)?.[metric]).filter(known);

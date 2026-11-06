@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, FileText, GitBranch, GitCommitHorizontal, HardDrive, LoaderCircle, RefreshCw, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, GitBranch, GitCommitHorizontal, HardDrive, LoaderCircle, Pin, RefreshCw, Search } from 'lucide-react';
 import { Diff, Hunk, parseDiff } from 'react-diff-view';
 import 'react-diff-view/style/index.css';
 import './project-git.css';
@@ -46,7 +46,7 @@ function GitTabs({ label, items, selected, onSelect }) {
   </div>;
 }
 
-function RefRow({ source, selected, onSelect }) {
+function RefRow({ source, selected, pinned, onSelect }) {
   const worktree = source.kind === 'worktree';
   const unavailable = worktree && (!source.exists || source.prunable);
   const Icon = worktree ? HardDrive : GitBranch;
@@ -56,8 +56,8 @@ function RefRow({ source, selected, onSelect }) {
     <span>
       <strong>{source.branch || source.name}</strong>
       <small>{source.path || source.head}</small>
-      {(source.current || source.locked || unavailable) && <small className="git-ref-mark">
-        {[source.current && '当前', source.locked && '已锁定', unavailable && '目录不可用'].filter(Boolean).join(' · ')}
+      {(pinned || source.current || source.locked || unavailable) && <small className="git-ref-mark">
+        {[pinned && '已钉住', source.current && '登记目录', source.locked && '已锁定', unavailable && '目录不可用'].filter(Boolean).join(' · ')}
       </small>}
     </span>
   </button>;
@@ -70,6 +70,18 @@ export function ProjectGit({ projectId }) {
   const [picked, setPicked] = useState(null);
   const [refresh, setRefresh] = useState(0);
   const [diffView, setDiffView] = useState('unified');
+  const pinKey = 'ai-hub-worktree-pins:' + projectId;
+  const [pins, setPins] = useState(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem(pinKey));
+      return Array.isArray(value) ? value : [];
+    } catch { return []; }
+  });
+  function togglePin(id) {
+    const next = pins.includes(id) ? pins.filter(item => item !== id) : [...pins, id];
+    setPins(next);
+    try { localStorage.setItem(pinKey, JSON.stringify(next)); } catch { /* 本窗口保留选择。 */ }
+  }
   const { data, error } = useGitData(`${base}/branches`, refresh);
   if (!data) return <div className="git-opening">
     <GitNotice error={error} loading={!error}>正在读取工程分支和工作树…</GitNotice>
@@ -81,10 +93,14 @@ export function ProjectGit({ projectId }) {
     ...data.branches.map(branch => ({ ...branch, kind: branch.remote ? 'remote' : 'local', key: branch.ref })),
   ];
   const available = sources.filter(source => source.kind !== 'worktree' || (source.exists && !source.prunable));
-  const selected = available.find(source => source.key === picked) || available.find(source => source.current) || available[0];
+  const availableHere = available.filter(source => source.kind === kind);
+  const selected = availableHere.find(source => source.key === picked) || availableHere.find(source => source.current) || availableHere[0];
   const search = query.trim().toLowerCase();
   const refs = sources.filter(source => source.kind === kind &&
-    [source.branch, source.name, source.path].some(value => value?.toLowerCase().includes(search)));
+    [source.branch, source.name, source.path].some(value => value?.toLowerCase().includes(search)))
+    .sort((a, b) => Number(pins.includes(b.key)) - Number(pins.includes(a.key)));
+  const policy = data.project.development_base;
+  const policyRef = data.branches.find(branch => branch.remote && branch.name === policy);
   const tabs = refKinds.map(([key, name]) => [key, `${name} ${sources.filter(source => source.kind === key).length}`]);
   return <div className="git-browser">
     <header className="git-overview">
@@ -96,17 +112,19 @@ export function ProjectGit({ projectId }) {
       <span className="git-local-label">本机只读</span>
       <button type="button" className="button git-reload" onClick={() => setRefresh(refresh + 1)}><RefreshCw size={14}/>刷新</button>
     </header>
+    <div className="git-baseline"><span>登记目录当前检出 <code>{data.project.branch || '待核对'}</code></span>{policy && <span>开发基准 <code>{policy}</code> · {policyRef?.head || '本机引用待核对'}</span>}</div>
     <div className="git-columns">
       <aside className="git-sidebar">
         <GitTabs label="引用类型" items={tabs} selected={kind} onSelect={id => { setKind(id); setQuery(''); }}/>
         <label className="git-search"><Search size={15}/><input aria-label="搜索分支或工作树" placeholder="搜索分支或路径" value={query} onChange={event => setQuery(event.target.value)}/></label>
         <div className="git-ref-list">
-          {refs.map(source => <RefRow key={source.key} source={source} selected={selected?.key === source.key} onSelect={() => setPicked(source.key)}/>)}
+          {refs.map(source => <RefRow key={source.key} source={source} pinned={pins.includes(source.key)} selected={selected?.key === source.key} onSelect={() => setPicked(source.key)}/>)}
           {!refs.length && <GitNotice>{query ? '没有匹配的分支或工作树。' : '此处暂无记录。'}</GitNotice>}
         </div>
         <p className="git-sidebar-note">{data.truncated ? '最多显示 500 条分支引用。' : '远端跟踪使用本机上次获取的引用。'}</p>
       </aside>
       {selected ? <GitSelection key={`${selected.key}:${selected.oid}`} source={selected} base={base}
+        refresh={refresh} pinned={pins.includes(selected.key)} onPin={() => togglePin(selected.key)}
         defaultToChanges={selected.kind === 'worktree' && (!selected.current || data.project.changes > 0 || !selected.oid)}
         diffView={diffView} onDiffView={setDiffView}/>
         : <GitNotice>没有可用的分支或工作树。</GitNotice>}
@@ -114,18 +132,20 @@ export function ProjectGit({ projectId }) {
   </div>;
 }
 
-function GitSelection({ source, base, defaultToChanges, diffView, onDiffView }) {
+function GitSelection({ source, base, defaultToChanges, diffView, onDiffView, refresh, pinned, onPin }) {
   const worktree = source.kind === 'worktree';
   const [mode, setMode] = useState(defaultToChanges ? 'changes' : 'history');
+  const context = useGitData(worktree ? base + '/worktree/' + source.id : null, refresh);
   return <div className="git-selection">
     <header className="git-selection-bar">
       <div className="git-selection-name">
         <strong title={source.path || source.ref}>{source.branch || source.name}</strong>
         {source.head && <code>{source.head}</code>}
       </div>
-      {worktree && <GitTabs label="工作树视图" items={ [['changes', '工作区'], ['history', '提交历史']] } selected={mode} onSelect={setMode}/>}
+      {worktree && <div className="git-worktree-actions"><button type="button" className="text-button git-pin" aria-pressed={pinned} onClick={onPin}><Pin size={14}/>{pinned ? '已钉住' : '钉住'}</button><GitTabs label="工作树视图" items={ [['changes', '工作区'], ['history', '提交历史']] } selected={mode} onSelect={setMode}/></div>}
       {!worktree && <span className="git-context-label">{source.remote ? '远端跟踪引用' : '本地分支'} · 提交历史</span>}
     </header>
+    {worktree && <div className="git-target-context" title={source.path}><span>{source.path}</span><small>{context.data ? '上游 ' + (context.data.upstream || '未配置') + ' · ' + (context.data.changes == null ? '工作区待读取' : context.data.changes ? context.data.changes + ' 项未提交变更' : '工作区干净') : context.error || '正在读取目标工作树…'}</small></div>}
     {mode === 'changes' ? <WorktreeChanges base={base} worktree={source.id} diffView={diffView} onDiffView={onDiffView}/>
       : <CommitHistory base={base} head={source.oid} diffView={diffView} onDiffView={onDiffView}/>}
   </div>;
