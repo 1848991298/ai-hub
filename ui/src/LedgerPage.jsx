@@ -134,11 +134,21 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   useEffect(() => {
     const scroll = tableScroll.current;
     if (!scroll) return;
-    const measure = () => setTableViewport(scroll.clientWidth);
+    const viewport = scroll.closest('.main-content');
+    const measure = () => {
+      setTableViewport(scroll.clientWidth);
+      const bottom = Math.min(window.innerHeight, viewport?.getBoundingClientRect().bottom ?? window.innerHeight);
+      // 加回外层滚动偏移，避免页面滚动时不断放大表格。
+      const top = scroll.getBoundingClientRect().top + (viewport?.scrollTop || 0);
+      scroll.style.setProperty('--ledger-available-height', `${Math.max(160, Math.floor(bottom - top - 24))}px`);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(scroll);
-    return () => observer.disconnect();
+    observer.observe(scroll.parentElement);
+    if (viewport) observer.observe(viewport);
+    addEventListener('resize', measure);
+    return () => { observer.disconnect(); removeEventListener('resize', measure); };
   }, [view]);
 
   useEffect(() => {
