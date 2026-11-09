@@ -3,6 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 from rules_hub import RulesService, RulesError, digest, plain_title
 
 class FakeCursor:
@@ -30,6 +31,18 @@ class RulesTests(unittest.TestCase):
         self.service=RulesService(self.root,self.home,self.cursor)
     def doc(self,id): return next(d for d in self.service.snapshot()['documents'] if d['id']==id)
     def save(self,id,source): return self.service.save(dict(id=id,source=source,revision=self.doc(id)['revision']))
+    def test_permission_recheck_clears_only_permission_error_without_marking_synced(self):
+        self.service.error='当前同步进程未通过辅助功能检测'
+        self.cursor.check_access=Mock(return_value={'status':'ready','message':'检测通过'})
+        result=self.service.recheck_access()
+        self.assertEqual(result['access']['status'],'ready')
+        self.assertEqual(result['snapshot']['error'],'')
+        self.assertIsNone(result['snapshot']['checked_at'])
+        self.assertEqual(self.cursor.writes,[])
+        self.service.error='外部冲突'
+        self.service.recheck_access()
+        self.assertEqual(self.service.error,'外部冲突')
+
     def test_title_drops_markdown_markers(self):
         self.assertEqual(plain_title('**核心理念与原则**'), '核心理念与原则')
         self.assertEqual(plain_title('## `lark-cli` 用法'), 'lark-cli 用法')

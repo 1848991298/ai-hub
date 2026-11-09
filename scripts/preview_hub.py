@@ -372,7 +372,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return handle_tracker(self, TRACKER, post=True)
             return handle_market(self, MARKET_BRIDGE, post=True)
         project_actions = {'/api/projects/pick', '/api/projects/add', '/api/projects/open-sourcetree'}
-        if path in {'/api/rules/sync', '/api/rules/save', '/api/rules/resolve', '/api/rules/permissions'}:
+        if path in {'/api/rules/sync', '/api/rules/save', '/api/rules/resolve', '/api/rules/permissions', '/api/rules/recheck'}:
             if not self.is_local_host() or self.headers.get('Origin') != f'http://{self.headers.get("Host")}':
                 self.send_error(403)
                 return
@@ -386,6 +386,9 @@ class Handler(SimpleHTTPRequestHandler):
                     result = subprocess.run(['/usr/bin/open', 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'], capture_output=True, timeout=5)
                     if result.returncode: raise RulesError('无法打开系统设置，请手动前往隐私与安全性 → 辅助功能。', 503)
                     result = {'opened': True}
+                elif path == '/api/rules/recheck':
+                    if value != {}: raise RulesError('权限检测不接受路径或命令。')
+                    result = service.recheck_access()
                 elif path == '/api/rules/sync':
                     if not isinstance(value, dict) or set(value) - {'force'} or ('force' in value and not isinstance(value['force'], bool)):
                         raise RulesError('同步不接受路径或命令。')

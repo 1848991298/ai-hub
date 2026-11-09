@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, knownTags, ledgerColumnDefaults, moveRow, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
+import { columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
 
 const rows = [
   { id: 'a', content: '过期未结束', status: '未启动', priority: 'P1', due: '2026-10-01', created_at: '2026-10-01 09:00', note: '' },
@@ -51,12 +51,26 @@ test('已结束默认沉底，关掉后回到表头排序', () => {
   assert.deepEqual(sortRecords(mixed, { key: 'status', dir: 'desc' }).map(row => row.status).slice(-2), ['已结束', '已结束']);
 });
 
-test('列宽记住合法值，越界收回默认范围内', () => {
-  const widths = columnWidths({ content: 20, note: 900, status: 120, created: 'wide' });
-  assert.equal(widths.content, 160);
-  assert.equal(widths.note, 560);
+test('列宽允许内容缩到 64 像素，越界仍收回合法范围', () => {
+  const widths = columnWidths({ content: 20, note: 1900, status: 120, created: 'wide' });
+  assert.equal(widths.content, 64);
+  assert.equal(widths.note, 1600);
   assert.equal(widths.status, 120);
   assert.equal(widths.created, ledgerColumnDefaults.created);
+});
+
+test('已保存列序剔除无效项并补回新列，拖放可插入到目标列两侧', () => {
+  assert.deepEqual(columnSequence(['note', 'missing', 'note']), ['note', ...ledgerColumnOrder.filter(key => key !== 'note')]);
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 'a', 'c', true), ['b', 'c', 'a']);
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 'c', 'b'), ['a', 'c', 'b']);
+});
+
+test('主动适配当前窗宽，过窄窗口保留可滚动的列宽', () => {
+  const widths = columnWidths();
+  const fit = fitColumnWidths(widths, 930);
+  assert.ok(Math.abs(Object.values(fit).reduce((sum, width) => sum + width, 0) - 930) < 4);
+  assert.ok(ledgerColumnOrder.every(key => fit[key] >= ledgerColumnLimits[key][0]));
+  assert.deepEqual(fitColumnWidths(widths, 200), widths);
 });
 
 test('标签纳入要同时具备，排除掉带有该标签的记录', () => {
@@ -74,8 +88,8 @@ test('标签纳入要同时具备，排除掉带有该标签的记录', () => {
 test('手动顺序优先，新记录排在已排过的后面', () => {
   const rows = [{ id: 'a', created_at: '2026-11-01' }, { id: 'b', created_at: '2026-11-02' }, { id: 'c', created_at: '2026-11-03' }];
   assert.deepEqual(orderedRows(rows, ['c', 'a']).map(row => row.id), ['c', 'a', 'b']);
-  assert.deepEqual(moveRow(['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'b']);
-  assert.deepEqual(moveRow(['a', 'b'], 'a', 'a'), ['a', 'b']);
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'b']);
+  assert.deepEqual(moveItem(['a', 'b'], 'a', 'a'), ['a', 'b']);
 });
 
 test('已有标签合并选项和问题、任务上的标签，并去掉重复', () => {
@@ -96,4 +110,13 @@ test('只提交改动字段，未改表单不会被刷新覆盖', () => {
   assert.deepEqual(changedFields({ ...base, tags: ['充电仓'] }, { ...base, tags: ['充电仓', 'TSDB'] }), { tags: ['充电仓', 'TSDB'] });
   assert.deepEqual(changedFields(base, base), {});
   assert.equal(editing.note, '正在写');
+});
+
+
+test('未配置标签字段的六列布局按可见列适配，不丢失隐藏列偏好', () => {
+  const keys=ledgerColumnOrder.filter(key => key !== 'tags');
+  const fitted=fitColumnWidths(columnWidths(),1100,keys);
+  assert.equal(Object.hasOwn(fitted,'tags'),false);
+  assert.ok(Math.abs(Object.values(fitted).reduce((a,b)=>a+b,0)-1100)<4);
+  assert.ok(columnWidths({...columnWidths(),...fitted}).tags>=44);
 });

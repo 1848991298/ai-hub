@@ -56,13 +56,31 @@ class CursorRules:
                 raise RulesError('Cursor 原生同步不可用或超时；请检查 Cursor 及系统设置中的辅助功能、自动化权限。', 503)
             if result.returncode:
                 if '-25211' in result.stderr:
-                    raise RulesError('macOS 未授予当前 AI Hub 辅助功能权限。请在系统设置 → 隐私与安全性 → 辅助功能重新授权 AI Hub，再检查同步。', 503)
+                    raise RulesError('当前同步进程未通过 macOS 辅助功能检测。若已开启授权，请重新检测权限并核对运行中的 AI Hub 是否为已授权版本。', 503)
                 if '-1743' in result.stderr:
                     raise RulesError('macOS 未允许 AI Hub 自动化控制 Cursor / System Events。请在系统设置 → 隐私与安全性 → 自动化中授权后重试。', 503)
                 # 只返回脚本自己的说明，避免客户端或系统输出混入正文。
                 message = result.stderr.strip().split('execution error:')[-1].strip()[:300]
                 raise RulesError(message or 'Cursor 原生同步失败。', 503)
             return result.stdout.rstrip('\n')
+
+    def check_access(self):
+        # 只读探测实际同步进程的权限，不激活 Cursor，也不改写规则。
+        script = 'tell application "System Events"\nif not UI elements enabled then return "denied"\nif not (exists process "Cursor") then return "not_running"\nget count of windows of process "Cursor"\nreturn "ready"\nend tell'
+        try:
+            result = subprocess.run(['/usr/bin/osascript', '-e', script], capture_output=True, text=True, timeout=8)
+        except (OSError, subprocess.TimeoutExpired):
+            return {'status': 'unknown', 'message': '权限检测未返回，请稍后重试。'}
+        if result.returncode:
+            if '-1743' in result.stderr:
+                return {'status': 'automation_denied', 'message': '当前同步进程未获得自动化访问，请检查 AI Hub 的自动化权限。'}
+            if '-25211' not in result.stderr:
+                return {'status': 'unknown', 'message': '暂时无法验证权限，请稍后重试。'}
+        if result.returncode or result.stdout.strip() == 'denied':
+            return {'status': 'accessibility_denied', 'message': '当前同步进程仍未通过辅助功能检测。若开关已开启，请核对运行中的 AI Hub 路径；重新构建或更换应用后，旧授权可能需要重新启用并重启应用。'}
+        if result.stdout.strip() == 'not_running':
+            return {'status': 'not_running', 'message': '辅助功能检测通过；Cursor 尚未运行，正文同步等待客户端打开。'}
+        return {'status': 'ready', 'message': '辅助功能和自动化读取检测通过。可点击「立即检查同步」核验正文。'}
 
     @contextmanager
     def transaction(self):
@@ -209,8 +227,8 @@ class RulesService:
                         clients=[dict(id='codex', status='synced' if codex_ok else 'conflict' if codex_source is not None else 'pending',
                                       path=str(entry), remote=codex_source if not codex_ok else None,
                                       message='直接读取 Hub 共享正文' if codex_ok else '全局入口缺失或存在独立修改；需修复映射'),
-                                 dict(id='cursor', status='error' if self.error else 'checking' if self.running else 'checked' if self.checked_at else 'unchecked',
-                                      message=self.error or '通过 Cursor 原生 User Rules 读取、保存并读回；会话加载另行核实')])
+                                 dict(id='cursor', status='checking' if self.running else 'error' if self.error else 'checked' if self.checked_at else 'unchecked',
+                                      message='正在核验 Cursor 原生正文…' if self.running else self.error or '通过 Cursor 原生 User Rules 读取、保存并读回；会话加载另行核实')])
 
     def save(self, value):
         if not isinstance(value, dict) or set(value) != {'id', 'source', 'revision'}:
@@ -258,6 +276,18 @@ class RulesService:
             self.persist()
         return self.snapshot()
 
+    def recheck_access(self):
+        access = self.cursor.check_access()
+        access['checked_at'] = time.strftime('%Y-%m-%dT%H:%M:%S%z')
+        with self.lock:
+            if access['status'] in ('accessibility_denied', 'automation_denied'):
+                self.error = access['message']
+                self.checked_at = None
+            if access['status'] in ('ready', 'not_running') and any(word in self.error for word in ('辅助功能', '自动化')):
+                self.error = ''
+                self.checked_at = None
+        return {'access': access, 'snapshot': self.snapshot()}
+
     def start_sync(self, force=False, deep=False):
         with self.lock:
             if self.running or (not force and time.monotonic() - self.last_attempt < 60):
@@ -265,6 +295,7 @@ class RulesService:
             if deep and isinstance(self.cursor, CursorRules):
                 self.cursor.deep_next = True
             self.running = True
+            self.checked_at = None
             self.last_attempt = time.monotonic()
             threading.Thread(target=self.sync, daemon=True).start()
             return True
@@ -337,6 +368,7 @@ class RulesService:
         except (RulesError, OSError, ValueError, subprocess.SubprocessError) as error:
             with self.lock:
                 self.error = str(error)
+                self.checked_at = None
                 self.persist()
         finally:
             with self.lock:

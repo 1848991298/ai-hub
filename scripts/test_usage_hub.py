@@ -47,6 +47,13 @@ class NormalizerTests(unittest.TestCase):
         zero=cc_payload(); zero['daily'][0]['costUSD']=0
         self.assertEqual(usage.normalize_ccusage(zero,WINDOW,STAMP)['daily'][0]['estimated_usd'],0)
 
+    def test_fallback_reference_preserved_without_claiming_exact_price(self):
+        row=usage.normalize_ccusage(cc_payload(True),WINDOW,STAMP)['daily'][0]
+        self.assertEqual(row['reference_usd'],2)
+        self.assertIsNone(row['estimated_usd'])
+        self.assertFalse(row['pricing_complete'])
+        self.assertTrue(row['models'][0]['fallback_pricing'])
+
     def test_duplicate_or_inconsistent_counts_stop_aggregation(self):
         payload=cc_payload(); payload['daily']*=2
         with self.assertRaises(ValueError): usage.normalize_ccusage(payload,WINDOW,STAMP)

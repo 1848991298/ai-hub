@@ -1,10 +1,11 @@
 export const statuses = ['未启动', '进行中', '已结束'];
 export const priorities = ['P0', 'P1', 'P2'];
 
-export function orderedRows(rows, saved) {
+export function orderedRows(rows, saved, sinkDone = false) {
   const ids = Array.isArray(saved) ? saved : [];
   const rank = new Map(ids.map((id, index) => [id, index]));
   return [...rows].sort((a, b) => {
+    if (sinkDone && (a.status === '已结束') !== (b.status === '已结束')) return a.status === '已结束' ? 1 : -1;
     const left = rank.has(a.id) ? rank.get(a.id) : ids.length;
     const right = rank.has(b.id) ? rank.get(b.id) : ids.length;
     if (left !== right) return left - right;
@@ -12,10 +13,10 @@ export function orderedRows(rows, saved) {
   });
 }
 
-export function moveRow(ids, from, to) {
+export function moveItem(ids, from, to, after = false) {
   if (!from || !to || from === to || !ids.includes(from) || !ids.includes(to)) return ids;
   const next = ids.filter(id => id !== from);
-  next.splice(next.indexOf(to), 0, from);
+  next.splice(next.indexOf(to) + Number(after), 0, from);
   return next;
 }
 
@@ -135,14 +136,32 @@ export function knownTags(data) {
   return found;
 }
 
-export const ledgerColumnDefaults = { content: 280, tags: 168, status: 108, created: 168, due: 176, priority: 96, note: 220 };
-const ledgerColumnLimits = { content: [160, 720], tags: [120, 360], status: [88, 200], created: [128, 260], due: [128, 280], priority: [84, 180], note: [120, 560] };
+export const ledgerColumnDefaults = { content: 300, status: 100, due: 148, priority: 94, tags: 148, created: 134, note: 192 };
+export const ledgerColumnLimits = { content: [64, 1600], tags: [44, 800], status: [44, 400], created: [48, 600], due: [48, 600], priority: [44, 400], note: [48, 1600] };
+export const ledgerColumnOrder = Object.keys(ledgerColumnDefaults);
+
+export function columnSequence(saved) {
+  const valid = Array.isArray(saved) ? saved.filter(key => ledgerColumnOrder.includes(key)) : [];
+  return [...new Set([...valid, ...ledgerColumnOrder])];
+}
 
 export function columnWidths(saved) {
-  return Object.fromEntries(Object.keys(ledgerColumnDefaults).map(key => {
+  return Object.fromEntries(ledgerColumnOrder.map(key => {
     const [minimum, maximum] = ledgerColumnLimits[key];
     const value = saved?.[key];
     const width = typeof value === 'number' && Number.isFinite(value) ? value : ledgerColumnDefaults[key];
     return [key, Math.min(maximum, Math.max(minimum, width))];
+  }));
+}
+
+// 适配仅在用户主动选择时执行；手动列宽不受视口变化或剩余空间影响。
+export function fitColumnWidths(widths, available, keys = ledgerColumnOrder) {
+  const minimum = keys.reduce((sum, key) => sum + ledgerColumnLimits[key][0], 0);
+  const preferred = keys.reduce((sum, key) => sum + widths[key], 0);
+  if (available < minimum) return widths;
+  const scale = (available - minimum) / (preferred - minimum || 1);
+  return Object.fromEntries(keys.map(key => {
+    const [min, max] = ledgerColumnLimits[key];
+    return [key, Math.round(Math.min(max, min + (widths[key] - min) * scale))];
   }));
 }

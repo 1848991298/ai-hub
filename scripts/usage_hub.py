@@ -107,11 +107,11 @@ def normalize_ccusage(payload, window, timestamp):
                     models.append({'name': name[:160], **token_mix(value, 'exclusive'), 'fallback_pricing': value.get('isFallback') is not False})
         priced = bool(models) and all(not model['fallback_pricing'] for model in models)
         daily.append({'date': key, **token_mix(row, 'exclusive'), 'estimated_usd': number(row.get('costUSD')) if priced else None,
-                      'metered_usd': None, 'pricing_complete': priced, 'models': models})
+                      'reference_usd': number(row.get('costUSD')), 'metered_usd': None, 'pricing_complete': priced, 'models': models})
     return {'state': 'ready', 'source': f'ccusage {ccusage_version()} · 本地日志', 'scope': '本机保留的 Codex 记录，不含未落盘的云端或其他设备任务',
             'updated_at': timestamp, 'reason': None, 'daily': sorted(daily, key=lambda r: r['date']),
             'coverage_mode': 'all_available',
-            'note': '读取本机仍保留的全部日记录；API 等价费用估算，未知或回退定价不计入，reasoning 已含在输出中。'}
+            'note': '读取本机仍保留的全部日记录；参考费用保留采集器的回退估算，完整定价日金额独立记录；reasoning 已含在输出中。'}
 
 
 def normalize_cursor_cost(payload, window, timestamp):
@@ -135,11 +135,11 @@ def normalize_cursor_cost(payload, window, timestamp):
         seen.add(key)
         # 只接受明确标记的扣费字段；API 单价总额不冒充订阅实际扣费。
         partial = row.get('currencyCode') != 'USD' or value.get('unpricedRequestCount', 0) != 0 or (value.get('coverage') or {}).get('unpriced', 0) != 0 or (row.get('coverage') or {}).get('unpriced', 0) != 0
-        models = [{'name': str(model['modelName'])[:160], **token_mix(model), 'fallback_pricing': number(model.get('cost')) is None} for model in value.get('modelBreakdowns', []) if isinstance(model, dict) and isinstance(model.get('modelName'), str)]
+        models = [{'name': str(model['modelName'])[:160], **token_mix(model), 'fallback_pricing': partial or number(model.get('cost')) is None, 'estimated_usd': None if partial else number(model.get('cost')), 'reference_usd': number(model.get('cost')) if row.get('currencyCode') == 'USD' else None} for model in value.get('modelBreakdowns', []) if isinstance(model, dict) and isinstance(model.get('modelName'), str)]
         if not models:
-            models = [{'name': model[:160], 'total_tokens': None} for model in value.get('modelsUsed', []) if isinstance(model, str)]
+            models = [{'name': model[:160], 'total_tokens': None, 'fallback_pricing': True} for model in value.get('modelsUsed', []) if isinstance(model, str)]
         daily.append({'date': key, **token_mix(value), 'estimated_usd': None if partial else number(value.get('totalCost')),
-                      'metered_usd': number(value.get('meteredCostUSD')) if row.get('currencyCode') == 'USD' else None, 'pricing_complete': not partial,
+                      'reference_usd': number(value.get('totalCost')) if row.get('currencyCode') == 'USD' else None, 'metered_usd': number(value.get('meteredCostUSD')) if row.get('currencyCode') == 'USD' else None, 'pricing_complete': not partial,
                       'models': models})
     all_history = row.get('reportingPeriod') == 'all'
     return {'state': 'ready', 'source': 'CodexBar 0.82 · Cursor 用量接口', 'scope': '当前账号云端可读取的全部日记录，可跨设备；与 Codex 本机记录范围不同' if all_history else '当前账号云端来源返回的日记录，未确认全量范围',

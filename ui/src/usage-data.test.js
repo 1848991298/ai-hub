@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recentDates, selectDates, chartBuckets, summarize, count, money } from './usage-data.js';
+import { recentDates, selectDates, chartBuckets, summarize, count, money, filterModels, pricingCoverage } from './usage-data.js';
 
 test('自然日跨月；缺失日期、金额不作为零加入',()=>{
   const dates=recentDates('2026-10-01',7);
@@ -40,4 +40,20 @@ test('长历史图表至多 60 组，按已知值汇总且空组仍未知',()=>{
   assert.ok(buckets.length<=60);assert.equal(buckets[0].value,15);assert.equal(buckets[0].observed,2);
   assert.equal(buckets[1].value,null);assert.equal(buckets.at(-1).value,0);
   assert.equal(buckets.filter(row=>row.value!==null).reduce((sum,row)=>sum+row.value,0),15);
+});
+
+
+test('筛选模型不按 token 比例摊费用，未选模型不污染统计', () => {
+  const daily = [{date:'2026-11-09',total_tokens:150,input_tokens:130,cached_tokens:100,output_tokens:20,reference_usd:5,estimated_usd:null,models:[{name:'a',total_tokens:100,input_tokens:90,cached_tokens:80,output_tokens:10,fallback_pricing:true},{name:'b',total_tokens:50,input_tokens:40,cached_tokens:20,output_tokens:10,fallback_pricing:false}]}];
+  assert.equal(filterModels(daily,null),daily);
+  assert.equal(filterModels(daily,['a','b'])[0].reference_usd,5);
+  const only=filterModels(daily,['a']);
+  assert.equal(only[0].total_tokens,100);
+  assert.equal(only[0].reference_usd,null);
+  assert.equal(summarize(only,['2026-11-09']).input,90);
+  assert.deepEqual(filterModels(daily,[]),[]);
+  const coverage=pricingCoverage(daily,['2026-11-09']);
+  assert.equal(coverage.reference,5);
+  assert.equal(coverage.fallbackPercent,100/150*100);
+  assert.deepEqual(coverage.fallbackModels,['a']);
 });

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ClipboardList, GripVertical, Plus, RefreshCw, Save, X } from 'lucide-react';
-import { blankForm, changedFields, columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, isOverdue, knownTags, ledgerColumnDefaults, moveRow, nextSort, orderedRows, sortRecords, statuses, priorities } from './ledger-model.js';
+import { ArrowDown, ArrowUp, ClipboardList, Columns3, GripVertical, Plus, RefreshCw, Save, X } from 'lucide-react';
+import { blankForm, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, fitColumnWidths, isOverdue, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
 import './ledger.css';
 
@@ -35,7 +35,7 @@ function Pill({ tone, mode, onClick, children }) {
 }
 
 function SortHeader({ column, label, sort, onSort }) {
-  const active = sort.key === column;
+  const active = sort?.key === column;
   return <button type="button" className={active ? 'is-sorted' : ''} onClick={() => onSort(column)}>{label}{active && (sort.dir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />)}</button>;
 }
 
@@ -57,9 +57,29 @@ function ColumnResize({ label, value, minimum, maximum, fallback, onChange }) {
     onPointerCancel={finish} onLostPointerCapture={finish} />;
 }
 
-const columnOrder = ['content', 'tags', 'status', 'created', 'due', 'priority', 'note'];
-const columnLabels = { content: '内容', tags: '标签', status: '状态', created: '创建时间', due: '截止时间', priority: '优先级', note: '备注' };
-const columnLimits = { content: [160, 720], tags: [120, 360], status: [88, 200], created: [128, 260], due: [128, 280], priority: [84, 180], note: [120, 560] };
+const columnLabels = { content: '内容', status: '状态', due: '截止时间', priority: '优先级', tags: '标签', created: '创建时间', note: '备注' };
+const sortableColumns = ['status', 'created', 'due', 'priority'];
+const rowIndexWidth = 56;
+
+function savedValue(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+}
+
+function ColumnLayout({ columns, widths, onWidth, onFit, onMove, onReset }) {
+  return <details className="ledger-column-layout">
+    <summary><Columns3 size={15}/>列布局</summary>
+    <div className="ledger-column-panel">
+      <header><strong>列顺序</strong><button type="button" onClick={onReset}>恢复默认</button></header>
+      <ol>{columns.map((key, index) => <li key={key}>
+        <span>{columnLabels[key]}</span>
+        <input type="number" aria-label={`${columnLabels[key]}列宽像素`} min={ledgerColumnLimits[key][0]} max={ledgerColumnLimits[key][1]} value={widths[key]} onChange={e => onWidth(key, Number(e.target.value))}/><small>px</small>
+        <button type="button" aria-label={`将${columnLabels[key]}左移`} disabled={index === 0} onClick={() => onMove(key, columns[index - 1], false)}><ArrowUp size={15}/></button>
+        <button type="button" aria-label={`将${columnLabels[key]}右移`} disabled={index === columns.length - 1} onClick={() => onMove(key, columns[index + 1], true)}><ArrowDown size={15}/></button>
+      </li>)}</ol>
+      <button type="button" className="button" onClick={onFit}>适应当前窗口</button><p>拖动列边缘或输入像素精调。手动宽度独立保存；双击边缘恢复该列。</p>
+    </div>
+  </details>;
+}
 
 export default function LedgerPage({ sinkDone = true, route = {}, projects = [], navigate }) {
   const kind = ['issue', 'task', 'all'].includes(route.kind) ? route.kind : 'issue';
@@ -72,7 +92,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const [saving, setSaving] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('ai-hub-ledger-view') === 'board' ? 'board' : 'list');
   const [tagDraft, setTagDraft] = useState('');
-  const [order, setOrder] = useState(() => { try { return JSON.parse(localStorage.getItem('ai-hub-ledger-order')) || {}; } catch { return {}; } });
+  const [order, setOrder] = useState(() => savedValue('ai-hub-ledger-order') || {});
   const [floatBox, setFloatBox] = useState(null);
   const [taggingId, setTaggingId] = useState(null);
   const [rowTag, setRowTag] = useState('');
@@ -84,7 +104,14 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   }, [recordId]);
   useEffect(() => { setFilters(current => ({ ...current, overdue: overdueMode })); }, [overdueMode]);
   const [sort, setSort] = useState({ key: 'due', dir: 'asc' });
-  const [widths, setWidths] = useState(() => { try { return columnWidths(JSON.parse(localStorage.getItem('ai-hub-ledger-columns'))); } catch { return columnWidths(); } });
+  const [widths, setWidths] = useState(() => columnWidths(savedValue('ai-hub-ledger-columns')));
+  const [columnOrder, setColumns] = useState(() => columnSequence(savedValue('ai-hub-ledger-column-order')));
+  const [tableViewport, setTableViewport] = useState(0);
+  const [columnTarget, setColumnTarget] = useState(null);
+  const [rowTarget, setRowTarget] = useState(null);
+  const tableScroll = useRef(null);
+  const columnDrag = useRef(null);
+  const rowDrag = useRef(null);
   const [editor, setEditor] = useState(null);
   const mounted = useRef(true);
 
@@ -101,6 +128,16 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   }
 
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-columns', JSON.stringify(widths)); } catch { /* 本窗口仍可使用当前列宽。 */ } }, [widths]);
+  useEffect(() => { try { localStorage.setItem('ai-hub-ledger-column-order', JSON.stringify(columnOrder)); } catch { /* 本窗口仍可使用当前列序。 */ } }, [columnOrder]);
+  useEffect(() => {
+    const scroll = tableScroll.current;
+    if (!scroll) return;
+    const measure = () => setTableViewport(scroll.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroll);
+    return () => observer.disconnect();
+  }, [view]);
 
   useEffect(() => {
     mounted.current = true;
@@ -185,19 +222,45 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       return { ...current, form: { ...current.form, tags } };
     });
   }
-  function saveOrder(next) {
-    const saved = { ...order, [kind]: next };
+  function saveOrder(ids, manual = true) {
+    const saved = { ...order, [kind]: { ids, manual } };
     setOrder(saved);
     try { localStorage.setItem('ai-hub-ledger-order', JSON.stringify(saved)); } catch { /* 顺序只留在这台电脑。 */ }
   }
-  function dropRow(event, targetId, ids) {
+  function sortByColumn(key) {
+    if (manualOrder) saveOrder(manualIds, false);
+    setSort(current => nextSort(manualOrder ? {} : current, key));
+  }
+  function moveColumn(from, to, after) {
+    setColumns(current => moveItem(current, from, to, after));
+  }
+  function resetColumns() {
+    setColumns(ledgerColumnOrder);
+    setWidths(columnWidths());
+  }
+  function columnDrop(event, key) {
+    if (!columnDrag.current || columnDrag.current === key) return null;
     event.preventDefault();
-    saveOrder(moveRow(ids, event.dataTransfer.getData('text/plain'), targetId));
+    event.dataTransfer.dropEffect = 'move';
+    const box = event.currentTarget.getBoundingClientRect();
+    return { key, after: event.clientX >= box.left + box.width / 2 };
+  }
+  function rowDrop(event, row) {
+    const from = rowDrag.current;
+    if (!allowReorder || !from || from.id === row.id || (sinkDone && from.done !== (row.status === '已结束'))) return null;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    const box = event.currentTarget.getBoundingClientRect();
+    return { key: row.id, after: event.clientY >= box.top + box.height / 2 };
   }
   function openFloat(event, next) {
     event.stopPropagation();
     const box = event.currentTarget.getBoundingClientRect();
-    setFloatBox({ ...next, left: Math.min(box.left, window.innerWidth - 360), top: box.bottom + 8 });
+    const above = box.top - 8;
+    const below = window.innerHeight - box.bottom - 8;
+    const openAbove = below < 240 && above > below;
+    const position = openAbove ? { bottom: window.innerHeight - above, maxHeight: above - 8 } : { top: box.bottom + 8, maxHeight: below - 8 };
+    setFloatBox({ ...next, position: { ...position, left: Math.max(12, Math.min(box.left, window.innerWidth - 352)) } });
   }
   function beginRowTag(event, row) {
     event.stopPropagation();
@@ -253,12 +316,15 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const supportsTags = rowKind => data?.tag_fields?.[rowKind] !== false;
   const showTagColumn = kind === 'all' ? supportsTags('issue') || supportsTags('task') : supportsTags(kind);
   const columns = showTagColumn ? columnOrder : columnOrder.filter(key => key !== 'tags');
-  const scopedRows = recordId ? rows.filter(row => row.id === recordId) : rows;
-  const sorted = sortRecords(filterRecords(scopedRows, filters, day), sort, sinkDone);
-  const visible = kind !== 'all' && !recordId && order[kind]?.length ? orderedRows(sorted, order[kind]) : sorted;
-  const visibleIds = visible.map(row => row.id);
-  const tableWidth = columns.reduce((sum, key) => sum + widths[key], 0);
-  const share = key => `${(widths[key] / tableWidth * 100).toFixed(2)}%`;
+  const allowReorder = kind !== 'all' && !recordId;
+  const savedOrder = order[kind];
+  const manualIds = Array.isArray(savedOrder) ? savedOrder : Array.isArray(savedOrder?.ids) ? savedOrder.ids : [];
+  const manualOrder = allowReorder && manualIds.length > 0 && savedOrder?.manual !== false;
+  const sorted = manualOrder ? orderedRows(rows, manualIds, sinkDone) : sortRecords(rows, sort, sinkDone);
+  const scopedRows = recordId ? sorted.filter(row => row.id === recordId) : sorted;
+  const visible = filterRecords(scopedRows, filters, day);
+  const fittedWidths = widths;
+  const tableWidth = columns.reduce((sum, key) => sum + fittedWidths[key], rowIndexWidth);
   const counts = {
     status: Object.fromEntries(statuses.map(item => [item, rows.filter(row => row.status === item).length])),
     priority: Object.fromEntries(priorities.map(item => [item, rows.filter(row => row.priority === item).length])),
@@ -273,7 +339,6 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const synced = data?.synced_at ? new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未成功';
   const label = { issue: '问题', task: '任务', all: '全部记录' }[kind];
   const editorLabel = editor?.kind === 'task' ? '任务' : '问题';
-  const allowReorder = kind !== 'all' && !recordId;
   function contextButton(row) {
     return <button type="button" className="ledger-context-trigger" title="查看执行资料" aria-label={'执行资料 · ' + row.content} onClick={event => { event.stopPropagation(); setContextRow(row); }}><ClipboardList size={15}/></button>;
   }
@@ -287,6 +352,35 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setFloatBox(null);
   }
   const tagCounts = Object.fromEntries(tagOptions.map(tag => [tag, rows.filter(row => (row.tags || []).includes(tag)).length]));
+  function renderCell(key, row) {
+    const overdue = isOverdue(row, day);
+    const tags = row.tags || [];
+    switch (key) {
+      case 'content': return <td key={key}>
+        <div className="ledger-content">
+          {kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
+          <button type="button" className="ledger-row-title" title={row.content} onClick={event => { event.stopPropagation(); openEdit(row); }}>{row.content}</button>
+          {contextButton(row)}
+        </div>
+      </td>;
+      case 'tags': if (!supportsTags(row.kind)) return <td key={key}>—</td>; return <td key={key}>
+        <div className="ledger-tag-cell">
+          {tags.length > 0 && <Pill tone="is-tag" mode={(filters.tags || {})[tags[0]]} onClick={() => setFacet('tags', tags[0])}><span title={tags[0]}>{tags[0]}</span></Pill>}
+          <button type="button" className="ledger-tag-more" aria-label={tags.length > 1 ? '查看全部标签' : '添加标签'} title={tags.length > 1 ? tags.join('、') : '添加标签'} onClick={event => {
+            setRowTag('');
+            tagCommit.current = false;
+            openFloat(event, { title: '标签', rowId: row.id, text: rowTagText(row) });
+          }}>{tags.length > 1 ? `+${tags.length - 1}` : <Plus size={14}/>}</button>
+        </div>
+      </td>;
+      case 'status': return <td key={key}><Pill tone={statusTone[row.status]} mode={filters.status[row.status]} onClick={() => setFacet('status', row.status)}>{row.status}</Pill></td>;
+      case 'created': return <td key={key} className="ledger-time" title={row.created_at || undefined}>{shortClock(row.created_at)}</td>;
+      case 'due': return <td key={key} className={overdue ? 'ledger-time ledger-past' : 'ledger-time'} title={overdue ? `${row.due} · 逾期` : undefined}>{row.due || '—'}{overdue && <span className="ledger-overdue-dot" aria-label="逾期" />}</td>;
+      case 'priority': return <td key={key}><Pill tone={priorityTone[row.priority]} mode={filters.priority[row.priority]} onClick={row.priority ? () => setFacet('priority', row.priority) : undefined}>{row.priority}</Pill></td>;
+      case 'note': return <td key={key} className="ledger-note">{row.note ? <button type="button" className="ledger-note-text" title={row.note} onClick={event => openFloat(event, { title: '备注', text: row.note })}>{row.note}</button> : '—'}</td>;
+      default: return null;
+    }
+  }
   return <section className="ledger">
     <header className="ledger-head">
       <div>
@@ -312,14 +406,22 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       {(!!chips.length || recordId) && <div className="ledger-chips">{recordId && <button type="button" className="ledger-chip" onClick={() => navigate?.({ kind, overdue: route.overdue })}>搜索定位到的记录<X size={13}/></button>}{chips.map(chip => <button key={chip.key} type="button" className="ledger-chip" onClick={chip.clear}>{chip.label}<X size={13} /></button>)}<button type="button" className="ledger-chip is-clear" onClick={clearFilters}>清除筛选</button></div>}
     </section>
     <div className="ledger-toolbar">
-      <div className="ledger-tabs" role="group" aria-label="记录类型">
-        {[['all', '全部', issues.length + tasks.length], ['issue', '问题', issues.length], ['task', '任务', tasks.length]].map(([id, name, size]) => <button type="button" key={id} aria-pressed={kind === id} className={kind === id ? 'selected' : ''} onClick={() => chooseKind(id)}>{name} <em>{data ? size : ''}</em></button>)}
+      <div className="ledger-toolbar-group">
+        <div className="ledger-tabs" role="group" aria-label="记录类型">
+          {[['all', '全部', issues.length + tasks.length], ['issue', '问题', issues.length], ['task', '任务', tasks.length]].map(([id, name, size]) => <button type="button" key={id} aria-pressed={kind === id} className={kind === id ? 'selected' : ''} onClick={() => chooseKind(id)}>{name} <em>{data ? size : ''}</em></button>)}
+        </div>
+        <div className="ledger-tabs" role="group" aria-label="视图">
+          <button type="button" aria-pressed={view === 'list'} className={view === 'list' ? 'selected' : ''} onClick={() => chooseView('list')}>列表</button>
+          <button type="button" aria-pressed={view === 'board'} className={view === 'board' ? 'selected' : ''} onClick={() => chooseView('board')}>看板</button>
+        </div>
       </div>
-      <div className="ledger-tabs" role="tablist" aria-label="视图">
-        <button type="button" className={view === 'list' ? 'selected' : ''} onClick={() => chooseView('list')}>列表</button>
-        <button type="button" className={view === 'board' ? 'selected' : ''} onClick={() => chooseView('board')}>看板</button>
+      <div className="ledger-toolbar-group ledger-toolbar-actions">
+        <span className="ledger-result-count" aria-live="polite">{data ? <>显示 <strong>{visible.length}</strong> / {rows.length} 条</> : '读取中…'}</span>
+        {view === 'board' ? <span className="ledger-caption">拖到另一列可改状态</span> : <>
+          {allowReorder && manualIds.length > 0 && <button type="button" className="ledger-layout-button" aria-pressed={manualOrder} onClick={() => saveOrder(manualIds, !manualOrder)}>手动行序</button>}
+          <ColumnLayout widths={widths} onWidth={(key,value) => setWidths(current => columnWidths({...current,[key]:value}))} onFit={() => setWidths(current => ({...current,...fitColumnWidths(current, Math.max(0, tableViewport - rowIndexWidth), columns)}))} columns={columns} onMove={moveColumn} onReset={resetColumns}/>
+        </>}
       </div>
-      <span className="ledger-caption">{allowReorder && '拖动左侧手柄调整本机顺序。'}点执行资料关联工作树。{view === 'board' ? '拖到另一列可改状态。' : ''}</span>
     </div>
     {view === 'board' ? <div className="ledger-board">{statuses.map(status => <section key={status} className="ledger-column" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); const row = visible.find(item => item.id === id); if (row) moveStatus(row, status); }}>
       <header><strong>{status}</strong><em>{visible.filter(row => row.status === status).length}</em></header>
@@ -328,31 +430,63 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         {supportsTags(row.kind) && <div className="ledger-card-tags" onClick={event => event.stopPropagation()}>{(row.tags || []).map(tag => <button key={tag} type="button" className={`ledger-pill is-tag ${(filters.tags || {})[tag] ? `is-${(filters.tags || {})[tag]}` : ''}`} onClick={() => setFacet('tags', tag)}>{tag}</button>)}{taggingId === row.id ? <input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入标签" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitRowTag(row); } if (event.key === 'Escape') { tagCommit.current = true; setTaggingId(null); } }} onBlur={() => commitRowTag(row)} /> : <button type="button" className="ledger-add-tag" onClick={event => beginRowTag(event, row)}>+ 标签</button>}</div>}
         <footer><Pill tone={priorityTone[row.priority]}>{row.priority}</Pill><span className={isOverdue(row, day) ? 'ledger-past' : ''}>{row.due || '无截止'}</span>{contextButton(row)}</footer>
       </article>)}
-    </section>)}</div> : <div className="ledger-table-wrap">
-      <table>
-        <colgroup>{columns.map(key => <col key={key} style={{ width: share(key) }} />)}</colgroup>
+    </section>)}</div> : <div className="ledger-table-wrap" ref={tableScroll} role="region" aria-label="台账列表" tabIndex={0}>
+      <table style={{ width: tableWidth }}>
+        <colgroup><col style={{ width: rowIndexWidth }}/>{columns.map(key => <col key={key} style={{ width: fittedWidths[key] }}/>)}</colgroup>
         <thead><tr>
-          {columns.map(key => <th key={key} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-            {key === 'content' || key === 'note' || key === 'tags' ? columnLabels[key] : <SortHeader column={key} label={columnLabels[key]} sort={sort} onSort={column => setSort(current => nextSort(current, column))} />}
-            <ColumnResize label={columnLabels[key]} value={widths[key]} minimum={columnLimits[key][0]} maximum={columnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => setWidths(current => columnWidths({ ...current, [key]: value }))} />
+          <th scope="col" className="ledger-index" aria-label="行号">#</th>
+          {columns.map(key => <th key={key} scope="col" data-column={key}
+            aria-sort={!manualOrder && sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+            className={columnTarget?.key === key ? (columnTarget.after ? 'drop-after' : 'drop-before') : undefined}
+            onDragOver={event => {
+              const target = columnDrop(event, key);
+              if (target && (columnTarget?.key !== key || columnTarget.after !== target.after)) setColumnTarget(target);
+            }}
+            onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget) && columnTarget?.key === key) setColumnTarget(null); }}
+            onDrop={event => {
+              const target = columnDrop(event, key);
+              if (target) moveColumn(columnDrag.current, key, target.after);
+              columnDrag.current = null;
+              setColumnTarget(null);
+            }}>
+            <div className="ledger-th-inner">
+              <span className="ledger-column-grip" draggable aria-hidden="true" title="拖动调整列顺序"
+                onDragStart={event => { columnDrag.current = key; event.dataTransfer.setData('text/plain', key); event.dataTransfer.effectAllowed = 'move'; }}
+                onDragEnd={() => { columnDrag.current = null; setColumnTarget(null); }}><GripVertical size={13}/></span>
+              {sortableColumns.includes(key) ? <SortHeader column={key} label={columnLabels[key]} sort={manualOrder ? null : sort} onSort={sortByColumn} /> : <span>{columnLabels[key]}</span>}
+            </div>
+            <ColumnResize label={columnLabels[key]} value={widths[key]} minimum={ledgerColumnLimits[key][0]} maximum={ledgerColumnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => setWidths(current => columnWidths({ ...current, [key]: value }))} />
           </th>)}
         </tr></thead>
-        <tbody>{visible.map(row => {
-          const overdue = isOverdue(row, day);
-          return <tr key={row.id} onDragOver={event => event.preventDefault()} onDrop={event => { if (allowReorder) dropRow(event, row.id, visibleIds); }} onClick={() => openEdit(row)}>
-            <td className="ledger-content" title={row.content}>{allowReorder && <button type="button" className="ledger-grip" draggable aria-label={`拖动调整${row.content}的顺序`} onClick={event => event.stopPropagation()} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }}><GripVertical size={14}/></button>}{kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}<span>{row.content}</span>{contextButton(row)}</td>
-            {showTagColumn && <td className="ledger-card-tags" onClick={event => event.stopPropagation()}>{supportsTags(row.kind) ? <>{(row.tags || []).map(tag => <Pill key={tag} tone="is-tag" mode={(filters.tags || {})[tag]} onClick={() => setFacet('tags', tag)}>{tag}</Pill>)}<button type="button" className="ledger-add-tag" onClick={event => { tagCommit.current = false; setTaggingId(row.id); setRowTag(''); openFloat(event, { title: '标签', rowId: row.id, text: rowTagText(row) }); }}>+ 标签</button></> : '—'}</td>}
-            <td><Pill tone={statusTone[row.status]} mode={filters.status[row.status]} onClick={() => setFacet('status', row.status)}>{row.status}</Pill></td>
-            <td className="ledger-time">{shortClock(row.created_at)}</td>
-            <td className={overdue ? 'ledger-time ledger-past' : 'ledger-time'}>{row.due || '—'}{overdue && <small>过期</small>}</td>
-            <td><Pill tone={priorityTone[row.priority]} mode={filters.priority[row.priority]} onClick={row.priority ? () => setFacet('priority', row.priority) : undefined}>{row.priority}</Pill></td>
-            <td className="ledger-note">{row.note ? <button type="button" className="ledger-note-text" onClick={event => openFloat(event, { title: '备注', text: row.note })}>{row.note}</button> : '—'}</td>
-          </tr>;
-        })}</tbody>
+        <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={() => openEdit(row)}
+          className={rowTarget?.key === row.id ? (rowTarget.after ? 'drop-after' : 'drop-before') : undefined}
+          onDragOver={event => {
+            const target = rowDrop(event, row);
+            if (target && (rowTarget?.key !== row.id || rowTarget.after !== target.after)) setRowTarget(target);
+          }}
+          onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget) && rowTarget?.key === row.id) setRowTarget(null); }}
+          onDrop={event => {
+            const target = rowDrop(event, row);
+            if (target) {
+              const ids = sorted.map(item => item.id);
+              const next = moveItem(ids, rowDrag.current.id, row.id, target.after);
+              if (next.some((id, position) => id !== ids[position])) saveOrder(next);
+            }
+            rowDrag.current = null;
+            setRowTarget(null);
+          }}>
+          <td className="ledger-index"><div className="ledger-index-inner">
+            {allowReorder && <span className="ledger-grip" draggable aria-hidden="true" title="拖动调整行顺序" onClick={event => event.stopPropagation()}
+              onDragStart={event => { rowDrag.current = { id: row.id, done: row.status === '已结束' }; event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }}
+              onDragEnd={() => { rowDrag.current = null; setRowTarget(null); }}><GripVertical size={14}/></span>}
+            <span>{index + 1}</span>
+          </div></td>
+          {columns.map(key => renderCell(key, row))}
+        </tr>)}</tbody>
       </table>
       {!visible.length && <div className="ledger-empty">{data ? '当前筛选下没有记录。' : '正在读取飞书表格…'}</div>}
     </div>}
-    {floatBox && <div className="ledger-float" style={{ left: floatBox.left, top: floatBox.top }} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = floatTags.includes(tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
+    {floatBox && <div className="ledger-float" style={floatBox.position} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = floatTags.includes(tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
     {contextRow && <TaskContext key={contextRow.kind + contextRow.id} row={contextRow} projects={projects} onClose={() => setContextRow(null)}/>}
     {editor && <div className="ledger-backdrop"><form className="ledger-dialog" role="dialog" aria-modal="true" aria-label={`${editor.mode === 'create' ? '新增' : '编辑'}${editorLabel}`} onSubmit={save}>
       <header className="ledger-dialog-head">

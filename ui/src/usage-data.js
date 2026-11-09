@@ -60,3 +60,25 @@ export function summarize(daily, dates) {
     hit: completeMix && input > 0 ? cached / input * 100 : null,
     input, cached, output: completeSum('output_tokens'), models: [...models.values()].sort((a,b) => (b.total_tokens ?? -1) - (a.total_tokens ?? -1)) };
 }
+
+// 模型过滤只汇总真实分项，费用缺少分项时保持未知，不按 token 比例摊钱。
+export function filterModels(daily, names) {
+  if (names === null) return daily;
+  const chosen = new Set(names);
+  const sumComplete = (models, key) => models.length && models.every(model => known(model[key])) ? models.reduce((sum, model) => sum + model[key], 0) : null;
+  return daily.flatMap(row => {
+    const models = (row.models || []).filter(model => chosen.has(model.name));
+    if (!models.length) return [];
+    if (models.length === row.models.length) return [row];
+    return [{...row, models, ...Object.fromEntries(['total_tokens','input_tokens','cached_tokens','output_tokens','estimated_usd','reference_usd'].map(key => [key, sumComplete(models,key)])), pricing_complete: models.every(model => !model.fallback_pricing)}];
+  });
+}
+
+export function pricingCoverage(daily, dates) {
+  const rows = daily.filter(row => dates.includes(row.date));
+  const models = rows.flatMap(row => row.models || []);
+  const total = models.reduce((sum, model) => sum + (known(model.total_tokens) ? model.total_tokens : 0), 0);
+  const fallback = models.filter(model => model.fallback_pricing).reduce((sum, model) => sum + (model.total_tokens || 0), 0);
+  const values = rows.map(row => row.reference_usd ?? row.estimated_usd).filter(known);
+  return {reference: values.length ? values.reduce((a,b)=>a+b,0) : null, referenceDays:values.length, fallbackTokens:fallback, fallbackPercent:total ? fallback/total*100 : null, fallbackModels:[...new Set(models.filter(model => model.fallback_pricing).map(model => model.name))]};
+}

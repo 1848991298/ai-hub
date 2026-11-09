@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, FileText, RefreshCw, Save, AlertCircle } from 'lucide-react';
+import { PanelResize } from './WorkspaceLayout.jsx';
 import './rules.css';
 
 const labels = { synced: '已同步', pending: '待同步', unchecked: '待检查', conflict: '有冲突', checking: '检查中', error: '连接异常', checked: '已检查' };
@@ -34,6 +35,15 @@ export default function RulesPage({ route = {}, notify, onSaved }) {
   const routeClient = ['shared', 'cursor', 'codex'].includes(route.client) ? route.client : 'all';
   const routeDoc = route.section ? 'global' : route.document || 'global';
   const [data, setData] = useState(null);
+  const [checkingAccess, setCheckingAccess] = useState(false);
+  const [access, setAccess] = useState(null);
+  const [listWidth, setListWidth] = useState(() => { try { return Math.max(160, Math.min(600, Number(localStorage.getItem('ai-hub-rules-list-width')) || 300)); } catch { return 300; } });
+  const [workspaceWidth, setWorkspaceWidth] = useState(1000);
+  const workspaceRef = useRef(null);
+  useEffect(() => { const observer = new ResizeObserver(entries => setWorkspaceWidth(entries[0].contentRect.width)); observer.observe(workspaceRef.current); return () => observer.disconnect(); }, []);
+  useEffect(() => { try { localStorage.setItem('ai-hub-rules-list-width', String(listWidth)); } catch {} }, [listWidth]);
+  const listMaximum = Math.max(160, Math.min(600, workspaceWidth - 340));
+  const fittedListWidth = Math.min(listWidth, listMaximum);
   const [selected, setSelected] = useState(routeDoc);
   const [client, setClient] = useState(routeClient);
   const [tab, setTab] = useState('read');
@@ -43,6 +53,12 @@ export default function RulesPage({ route = {}, notify, onSaved }) {
   const [drafts, setDrafts] = useState(() => { try { return JSON.parse(localStorage.getItem('ai-hub-rule-drafts') || '{}'); } catch { return {}; } });
   useEffect(() => { try { localStorage.setItem('ai-hub-rule-drafts', JSON.stringify(drafts)); } catch { setError('浏览器草稿暂存不可用，请保存后再关闭页面。'); } }, [drafts]);
   const busy = useRef(false);
+  const awaitingSettings = useRef(false);
+  useEffect(() => {
+    const resume = () => { if(awaitingSettings.current && !document.hidden) { awaitingSettings.current=false; recheckAccess(); } };
+    addEventListener('focus',resume); document.addEventListener('visibilitychange',resume);
+    return () => { removeEventListener('focus',resume); document.removeEventListener('visibilitychange',resume); };
+  }, []);
   const bodyRef = useRef(null);
   useEffect(() => {
     setSelected(routeDoc);
@@ -93,6 +109,12 @@ export default function RulesPage({ route = {}, notify, onSaved }) {
   function edit(text) {
     setDrafts(previous => ({ ...previous, [doc.id]: { source: text, revision: draft?.revision ?? doc.revision, base: draft?.base ?? doc.source } }));
   }
+  async function recheckAccess() {
+    setCheckingAccess(true); setError('');
+    try { const result = await api('/recheck', {}); setAccess(result.access); setData(result.snapshot); }
+    catch(e) { setError(e.message); }
+    finally { setCheckingAccess(false); }
+  }
   async function sync() {
     setError('');
     try { const r = await api('/sync', { force: true }); setData(r.snapshot); }
@@ -118,12 +140,14 @@ export default function RulesPage({ route = {}, notify, onSaved }) {
     finally { setSaving(false); }
   }
   const docs = data?.documents.filter(d => (client === 'all' || d.client === client || d.client === 'shared') && (d.title + d.source).toLowerCase().includes(query.toLowerCase())) || [];
-  return <div className="rules-workspace">
-    <div className="rules-heading"><div><h2>全局规则</h2><p>保存到 Hub，Cursor 与 Codex 持续同步。</p></div><button className="button" onClick={sync} disabled={data?.running}><RefreshCw size={15} className={data?.running ? 'rules-spin' : ''}/>{data?.running ? '同步中…' : '立即检查同步'}</button></div>
+  return <div className="rules-workspace" ref={workspaceRef}>
+    <div className="rules-heading"><div><h2>全局规则</h2><p>保存到 Hub，Cursor 与 Codex 持续同步。</p></div><div className="rules-actions"><button className="button" onClick={recheckAccess} disabled={checkingAccess || data?.running}><RefreshCw size={14} className={checkingAccess ? 'rules-spin' : ''}/>{checkingAccess ? '检测中…' : '重新检测权限'}</button><button className="button" onClick={sync} disabled={data?.running}><RefreshCw size={15} className={data?.running ? 'rules-spin' : ''}/>{data?.running ? '同步中…' : '立即检查同步'}</button></div></div>
     <div className="rules-clients">{data?.clients.map(c => <div key={c.id}><strong>{c.id === 'cursor' ? 'Cursor' : 'Codex'}</strong><span className={`rule-state ${c.status}`}>{labels[c.status]}</span><small>{c.message}</small>{c.id === 'cursor' && <small>最近成功核验 {verifiedAt}</small>}</div>)}</div>
-    {(error || data?.error) && <div role="alert" className="rules-error"><AlertCircle size={16}/><span>{error || data.error}</span>{/辅助|自动化|权限/.test(error || data.error) && <button className="button" onClick={async () => {try {await api('/permissions', {});} catch(e) {setError(e.message);}}}>打开系统权限设置</button>}</div>}
+    {(error || data?.error) && <div role="alert" className="rules-error"><AlertCircle size={16}/><span>{error || data.error}</span>{/辅助|自动化|权限/.test(error || data.error) && <button className="button" onClick={async () => {try {await api('/permissions', {}); awaitingSettings.current=true;} catch(e) {setError(e.message);}}}>打开系统权限设置</button>}</div>}
+    {access && <p className="rules-access" role="status">{access.message}<small>检测于 {new Date(access.checked_at).toLocaleTimeString('zh-CN', {hour12:false})} · 权限检测独立于正文同步</small></p>}
     <div className="rules-filter"><div className="segmented">{[['all','全部'],['shared','共享'],['cursor','Cursor'],['codex','Codex']].map(([id,label]) => <button key={id} aria-pressed={client === id} className={client === id ? 'active' : ''} onClick={() => setClient(id)}>{label}</button>)}</div><input aria-label="搜索全局规则" placeholder="搜索规则内容…" value={query} onChange={e => setQuery(e.target.value)}/></div>
-    <div className="rules-columns"><nav aria-label="规则来源列表">{docs.map(d => <button key={d.id} className={selected === d.id ? 'active' : ''} onClick={() => setSelected(d.id)}><FileText size={17}/><span><strong>{d.title}</strong><small>{d.client === 'shared' ? 'Cursor / Codex 共享' : d.client === 'codex' ? 'Codex 独立入口' : 'Cursor 用户规则'}{drafts[d.id] && drafts[d.id].source !== d.source ? ' · 有未保存编辑' : ''}</small></span><span className={`rule-state ${stateTone(d)}`}>{stateText(d)}</span></button>)}{!data && <p>正在读取规则…</p>}{data && !docs.length && <p>没有匹配的规则。</p>}</nav>
+    <div className="rules-columns" style={{'--rules-list-width':`${fittedListWidth}px`}}><nav id="rules-source-list" aria-label="规则来源列表">{docs.map(d => <button key={d.id} className={selected === d.id ? 'active' : ''} onClick={() => setSelected(d.id)}><FileText size={17}/><span><strong>{d.title}</strong><small>{d.client === 'shared' ? 'Cursor / Codex 共享' : d.client === 'codex' ? 'Codex 独立入口' : 'Cursor 用户规则'}{drafts[d.id] && drafts[d.id].source !== d.source ? ' · 有未保存编辑' : ''}</small></span><span className={`rule-state ${stateTone(d)}`}>{stateText(d)}</span></button>)}{!data && <p>正在读取规则…</p>}{data && !docs.length && <p>没有匹配的规则。</p>}</nav>
+    <PanelResize label="调整规则列表宽度" controls="rules-source-list" value={fittedListWidth} minimum={160} maximum={listMaximum} defaultValue={300} onChange={setListWidth} className="rules-divider"/>
     <section className="rules-document">{doc && <><header><h3>{doc.title}</h3><span className={`rule-state ${stateTone(doc)}`}>{stateText(doc)}</span></header><code className="rules-path">{doc.path}</code><div className="rules-editor-tools"><div className="segmented">{[['read','阅读'],['edit','编辑'],['diff','对比']].map(([id,label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}</div><button className="button primary" disabled={!dirty || saving || stale || doc.id === 'codex-entry'} onClick={save}><Save size={15}/>{saving ? '保存中…' : '保存并同步'}</button></div>
     {stale && <p className="rules-error">来源已被其他窗口修改，当前编辑已保留。请在对比页查看最新来源，再选择重新编辑。</p>}
     {doc.id !== 'codex-entry' && doc.status === 'conflict' && doc.remote !== null && doc.remote !== undefined && <div className="rules-conflict"><strong>客户端与 Hub 存在差异，自动同步已暂停。</strong><p>对比两个版本后选择；未保存编辑请先保留。</p><div><button className="button" disabled={saving || dirty} onClick={() => resolve('hub')}>使用 Hub 版本</button><button className="button" disabled={saving || dirty || doc.remote === ''} onClick={() => resolve('client')}>采用客户端版本</button><button className="button" onClick={() => setTab('diff')}>查看差异</button></div></div>}
