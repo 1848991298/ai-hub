@@ -43,7 +43,8 @@ class CursorRules:
 
     def call(self, action, old='', new=''):
         with tempfile.TemporaryDirectory(prefix='ai-hub-cursor-') as directory:
-            args = ['/usr/bin/osascript', str(self.script), action]
+            bridge = os.environ.get('AI_HUB_RULES_BRIDGE')
+            args = [bridge, '--cursor-rules', action] if bridge else ['/usr/bin/osascript', str(self.script), action]
             if action not in ('read', 'list'):
                 for name, value in [('old', old), ('new', new)]:
                     p = Path(directory) / name
@@ -66,6 +67,24 @@ class CursorRules:
 
     def check_access(self):
         # 只读探测实际同步进程的权限，不激活 Cursor，也不改写规则。
+        bridge = os.environ.get('AI_HUB_RULES_BRIDGE')
+        if bridge:
+            try:
+                result = subprocess.run([bridge, '--rules-probe'], capture_output=True, text=True, timeout=12)
+                value = json.loads(result.stdout) if result.returncode == 0 else {}
+                status = value.get('status', 'unknown')
+                messages = {
+                    'ready': '当前 AI Hub 的辅助功能与自动化读取检测通过。可继续核验规则正文。',
+                    'not_running': '当前 AI Hub 辅助功能检测通过；Cursor 尚未运行。',
+                    'accessibility_denied': '当前 AI Hub 尚未通过辅助功能授权，请核对下方运行路径对应的应用。',
+                    'automation_denied': '辅助功能已通过；AI Hub 对 System Events 的自动化访问仍未授权。',
+                    'read_denied': '应用自身辅助功能已通过，但系统界面读取被拒绝，请重新启动应用后再检查。',
+                    'unknown': '当前 AI Hub 原生权限检查未返回明确结果。',
+                }
+                return {'status': status if status in messages else 'unknown', 'native_trusted': value.get('native_trusted'), 'message': messages.get(status, messages['unknown'])}
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                return {'status': 'unknown', 'message': '当前 AI Hub 原生权限检查超时或不可用，请重新打开应用。'}
+
         script = 'tell application "System Events"\nif not UI elements enabled then return "denied"\nif not (exists process "Cursor") then return "not_running"\nget count of windows of process "Cursor"\nreturn "ready"\nend tell'
         try:
             result = subprocess.run(['/usr/bin/osascript', '-e', script], capture_output=True, text=True, timeout=8)
@@ -278,9 +297,10 @@ class RulesService:
 
     def recheck_access(self):
         access = self.cursor.check_access()
+        access['app_path'] = os.environ.get('AI_HUB_DESKTOP_APP')
         access['checked_at'] = time.strftime('%Y-%m-%dT%H:%M:%S%z')
         with self.lock:
-            if access['status'] in ('accessibility_denied', 'automation_denied'):
+            if access['status'] in ('accessibility_denied', 'automation_denied', 'read_denied'):
                 self.error = access['message']
                 self.checked_at = None
             if access['status'] in ('ready', 'not_running') and any(word in self.error for word in ('辅助功能', '自动化')):

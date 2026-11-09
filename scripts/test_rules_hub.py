@@ -142,4 +142,18 @@ class NativeTransactionTests(unittest.TestCase):
                     operation_reached = True
         self.assertTrue(operation_reached)
 
+class NativeBridgeTests(unittest.TestCase):
+    def test_desktop_probe_and_rule_calls_use_signed_app_instead_of_external_interpreter(self):
+        import subprocess
+        from unittest.mock import patch
+        from rules_hub import CursorRules
+        cursor=CursorRules()
+        with patch.dict('os.environ', {'AI_HUB_RULES_BRIDGE':'/fixture/AIHub'}):
+            with patch('rules_hub.subprocess.run',return_value=subprocess.CompletedProcess([],0,'{"status":"ready","native_trusted":true}','')) as runner:
+                self.assertEqual(cursor.check_access()['status'],'ready')
+                self.assertEqual(runner.call_args.args[0],['/fixture/AIHub','--rules-probe'])
+            with patch('rules_hub.subprocess.run',return_value=subprocess.CompletedProcess([],0,'confirmed','')) as runner:
+                self.assertEqual(cursor.call('read'),'confirmed')
+                self.assertEqual(runner.call_args.args[0],['/fixture/AIHub','--cursor-rules','read'])
+
 if __name__=='__main__':unittest.main()

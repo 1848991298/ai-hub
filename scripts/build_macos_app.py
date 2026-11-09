@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""构建本机架构的 AI Hub.app；仅写入 Hub 的忽略目录 .build 与 dist。"""
+"""构建本机架构的 AI Hub.app；输出、备份和本机签名偏好只写入忽略目录。"""
 import argparse
+import json
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 import platform
@@ -16,9 +19,51 @@ def run(*arguments):
     subprocess.run(arguments, cwd=ROOT, check=True)
 
 
+def signing_identity(root, requested=None):
+    """复用本机已选身份；首次仅自动选择唯一的开发身份，不写入证书或私钥。"""
+    result = subprocess.run(['/usr/bin/security', 'find-identity', '-v', '-p', 'codesigning'], capture_output=True, text=True, check=True)
+    identities = {key: name for key, name in re.findall(r'\d+\) ([A-F0-9]{40}) "([^"]+)"', result.stdout)}
+    preference = root / '.local/macos-signing.json'
+    saved = None
+    if preference.is_file():
+        saved = json.loads(preference.read_text()).get('identity')
+    chosen = requested or saved
+    if chosen == '-':
+        return '-', None
+    if chosen:
+        matches = [key for key, name in identities.items() if key == chosen or name == chosen]
+        if len(matches) != 1:
+            raise ValueError('已选签名身份不可用，请通过 --sign-identity 选择可用身份；为保护已有权限，不自动切换为临时签名。')
+        return matches[0], preference
+    developers = [key for key, name in identities.items() if name.startswith('Apple Development:')]
+    if len(developers) == 1:
+        return developers[0], preference
+    if len(developers) > 1:
+        raise ValueError('有多个开发签名身份，请用 --sign-identity 指定本机身份。')
+    return '-', None
+
+
+def install_bundle(bundle, destination, backup):
+    """保留应用外层目录，避免系统授权随重命名后的旧应用移到备份路径。"""
+    if not destination.exists():
+        shutil.copytree(bundle, destination, symlinks=True)
+        return
+    shutil.copytree(destination, backup, symlinks=True)
+    content = destination / 'Contents'
+    try:
+        shutil.rmtree(content)
+        shutil.copytree(bundle / 'Contents', content, symlinks=True)
+    except Exception:
+        if content.exists():
+            shutil.rmtree(content)
+        shutil.copytree(backup / 'Contents', content, symlinks=True)
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--skip-ui-build', action='store_true', help='复用已构建的 ui/dist')
+    parser.add_argument('--sign-identity', default=os.environ.get('AI_HUB_SIGN_IDENTITY'), help='本机签名身份；首次自动选择唯一 Apple Development，- 显式选择临时签名')
     args = parser.parse_args()
     if platform.system() != 'Darwin':
         parser.error('macOS App 需要在安装 Xcode 命令行工具的 Mac 上构建；其他系统仍可使用网页版')
@@ -28,6 +73,14 @@ def main():
         run('npm', '--prefix', str(ROOT / 'ui'), 'run', 'build')
     if not (ROOT / 'ui/dist/index.html').is_file():
         parser.error('ui/dist 不存在，请先构建网页版')
+    try:
+        identity, signing_preference = signing_identity(ROOT, args.sign_identity)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        parser.error(str(error))
+    if identity == '-':
+        print('使用临时签名：重新构建会改变应用身份，辅助功能权限可能需要重新授权。')
+    else:
+        print('使用本机稳定开发签名，更新保持应用身份；首次更换签名需核对系统授权。')
     build = ROOT / '.build'; build.mkdir(exist_ok=True)
     output = ROOT / 'dist'; output.mkdir(exist_ok=True)
     architecture = platform.machine()
@@ -67,9 +120,9 @@ def main():
         run('xcrun', 'swiftc', '-swift-version', '6', '-default-isolation', 'MainActor', '-O',
             '-target', f'{architecture}-apple-macos13.0', '-framework', 'Cocoa',
             str(ROOT / 'desktop/macos/project_picker.swift'), '-o', str(picker_executable / 'AIHubProjectPicker'))
-        run('codesign', '--force', '--sign', '-', str(picker))
+        run('codesign', '--force', '--sign', identity, str(picker))
         run('xcrun', 'swift', str(ROOT / 'desktop/macos/icon.swift'), str(resources))
-        run('codesign', '--force', '--sign', '-', str(bundle))
+        run('codesign', '--force', '--sign', identity, str(bundle))
         run('codesign', '--verify', '--deep', '--strict', str(bundle))
         destination = output / 'AI Hub.app'
         if destination.exists():
@@ -77,8 +130,14 @@ def main():
             if not existing.exists() or plistlib.loads(existing.read_bytes()).get('CFBundleIdentifier') != 'com.aihub.desktop':
                 parser.error('目标目录已有其他应用，停止覆盖')
             backup = build / ('AI Hub-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.app')
-            destination.rename(backup)
-        shutil.move(str(bundle), destination)
+        else:
+            backup = build / ('AI Hub-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.app')
+        install_bundle(bundle, destination, backup)
+        run('codesign', '--verify', '--deep', '--strict', str(destination))
+        if signing_preference:
+            signing_preference.parent.mkdir(exist_ok=True)
+            signing_preference.write_text(json.dumps({'identity': identity}, indent=2) + '\n')
+            signing_preference.chmod(0o600)
     archive = output / f'AI-Hub-macOS-{architecture}.zip'
     if archive.exists():
         archive.rename(build / (datetime.now().strftime('%Y%m%d-%H%M%S-%f-') + archive.name))

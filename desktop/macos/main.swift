@@ -1,6 +1,8 @@
 import Cocoa
 import WebKit
 import OSLog
+@preconcurrency import ApplicationServices
+import Carbon
 
 private struct HubSnapshot: Decodable { let hub_root: String }
 private struct Appearance: Decodable { let theme: String }
@@ -22,6 +24,7 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.userContentController.add(self, name: "appearance")
+        config.userContentController.add(self, name: "permissions")
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -143,6 +146,8 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         process.arguments = [resources.appendingPathComponent("preview_hub.py").path, "--port", "4317", "--assets", resources.appendingPathComponent("web").path]
         var environment = ProcessInfo.processInfo.environment
         environment["AI_HUB_ROOT"] = hub.path
+        environment["AI_HUB_DESKTOP_APP"] = Bundle.main.bundleURL.path
+        environment["AI_HUB_RULES_BRIDGE"] = Bundle.main.executableURL?.path
         environment["AI_HUB_PROJECT_PICKER"] = resources.appendingPathComponent("ProjectPicker.app/Contents/MacOS/AIHubProjectPicker").path
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         environment["LANG"] = "en_US.UTF-8"
@@ -166,8 +171,12 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, isLocal(message.frameInfo.request.url), let theme = message.body as? String else { return }
-        setAppearance(theme)
+        guard message.frameInfo.isMainFrame, isLocal(message.frameInfo.request.url), let value = message.body as? String else { return }
+        if message.name == "permissions", value == "accessibility" {
+            // 只在用户主动打开权限入口时请求，后台检测不弹系统授权。
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        } else if message.name == "appearance" { setAppearance(value) }
     }
 
     private func isLocal(_ url: URL?) -> Bool {
@@ -200,10 +209,79 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
     func applicationWillTerminate(_ notification: Notification) {
         startup?.cancel()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "appearance")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "permissions")
         if service?.isRunning == true { service?.terminate() }
     }
 }
 
+
+// 规则脚本只来自已签名应用资源，动作白名单与后端适配器一致。
+// 在应用自己的进程执行，避免系统把多层外部解释器当成另一个授权主体。
+func scriptResult(_ script: NSAppleScript, arguments: [String]? = nil) -> (String?, NSDictionary?) {
+    var failure: NSDictionary?
+    let result: NSAppleEventDescriptor
+    if let arguments {
+        let values = NSAppleEventDescriptor.list()
+        for (index, value) in arguments.enumerated() { values.insert(NSAppleEventDescriptor(string: value), at: index + 1) }
+        let parameters = NSAppleEventDescriptor.list()
+        parameters.insert(values, at: 1)
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kASAppleScriptSuite), eventID: AEEventID(kASSubroutineEvent), targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(NSAppleEventDescriptor(string: "hubRules"), forKeyword: AEKeyword(keyASSubroutineName))
+        event.setParam(parameters, forKeyword: AEKeyword(keyDirectObject))
+        result = script.executeAppleEvent(event, error: &failure)
+    } else {
+        result = script.executeAndReturnError(&failure)
+    }
+    return (result.stringValue, failure)
+}
+
+func rulesBridge(_ arguments: [String]) -> Int32 {
+    let trusted = AXIsProcessTrusted()
+    if arguments == ["--rules-probe"] {
+        var status = trusted ? "ready" : "accessibility_denied"
+        let probeSource = """
+        tell application "System Events"
+            if not (exists process "Cursor") then return "not_running"
+            get count of windows of process "Cursor"
+            return "ready"
+        end tell
+        """
+        if trusted, let script = NSAppleScript(source: probeSource) {
+            let (value, failure) = scriptResult(script)
+            if let failure {
+                status = (failure[NSAppleScript.errorNumber] as? Int) == -1743 ? "automation_denied" : "read_denied"
+            } else { status = value ?? "unknown" }
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: ["status": status, "native_trusted": trusted]) {
+            FileHandle.standardOutput.write(data)
+        }
+        return 0
+    }
+    guard arguments.first == "--cursor-rules", arguments.count >= 2,
+          ["read", "list", "get", "update", "add"].contains(arguments[1]),
+          arguments.count == (["read", "list"].contains(arguments[1]) ? 2 : 5) else { return 2 }
+    guard trusted else {
+        FileHandle.standardError.write(Data("execution error: 当前 AI Hub 未获得辅助功能授权。 (-25211)".utf8)); return 1
+    }
+    guard let url = Bundle.main.resourceURL?.appendingPathComponent("cursor_rules.applescript") else { return 2 }
+    guard let source = try? String(contentsOf: url, encoding: .utf8), source.contains("on run argv"),
+          let script = NSAppleScript(source: source.replacingOccurrences(of: "on run argv", with: "on hubRules(argv)").replacingOccurrences(of: "end run", with: "end hubRules")) else { return 2 }
+    var loadingError: NSDictionary?
+    guard script.compileAndReturnError(&loadingError) else { return 2 }
+    let (value, failure) = scriptResult(script, arguments: Array(arguments.dropFirst()))
+    if let failure {
+        let number = failure[NSAppleScript.errorNumber] as? Int ?? -1
+        let message = failure[NSAppleScript.errorMessage] as? String ?? "Cursor 原生操作失败。"
+        FileHandle.standardError.write(Data("execution error: \(message) (\(number))".utf8)); return 1
+    }
+    FileHandle.standardOutput.write(Data((value ?? "").utf8))
+    return 0
+}
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments.first == "--cursor-rules" || arguments.first == "--rules-probe" {
+    exit(rulesBridge(arguments))
+}
 let app = NSApplication.shared
 let delegate = HubApp()
 app.delegate = delegate
