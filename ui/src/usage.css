@@ -30,3 +30,5 @@
 @media(prefers-reduced-motion:reduce){.usage-model-menu{animation:none}}
 @container(max-width:700px){.usage-day-counters{gap:8px 14px}.usage-model-menu{right:auto;left:0}.usage-chart text{font-size:9px}.usage-panel{padding:14px}.usage-day-models th:first-child{width:auto}}
 .usage-model-menu input[type=checkbox]{-webkit-appearance:checkbox;appearance:auto;width:15px;height:15px;margin:0;cursor:pointer}
+
+.usage-bar.missing.excluded{stroke:var(--warning);fill:var(--warning-bg);stroke-dasharray:3 3}

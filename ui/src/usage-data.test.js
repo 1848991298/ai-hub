@@ -57,3 +57,13 @@ test('筛选模型不按 token 比例摊费用，未选模型不污染统计', (
   assert.equal(coverage.fallbackPercent,100/150*100);
   assert.deepEqual(coverage.fallbackModels,['a']);
 });
+
+
+test('完整定价空柱区分排除价格和没有用量，真实零值仍保留', () => {
+  const dates=recentDates('2026-11-09',3);
+  const bars=chartBuckets(dates,[{date:'2026-11-08',total_tokens:100,estimated_usd:null,reference_usd:2,pricing_complete:false},{date:'2026-11-09',total_tokens:0,estimated_usd:0,pricing_complete:true}],'estimated_usd');
+  assert.match(bars[0].missingReason,/未返回/);
+  assert.match(bars[1].missingReason,/未计入完整定价/);
+  assert.equal(bars[1].excluded,true);
+  assert.equal(bars[2].value,0);
+});
