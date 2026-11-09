@@ -1,7 +1,8 @@
 import React, {useEffect,useRef,useState} from 'react';
 import {ArrowDownToLine,ArrowUpRight,Check,Download,Expand,FileUp,GripVertical,RefreshCw,Save,Star,X,Database} from 'lucide-react';
 import {applyOrder,moveItem} from './market-order.js';
-import {buildBoard, calendarPoints, shiftDate, storeAlerts} from './market-board.js';
+import {shiftDate, storeAlerts} from './market-board.js';
+import MarketDashboard from './MarketDashboard.jsx';
 import './market.css';
 const today=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
 const counts={downloads:'商店下载量',new_users:'新增用户',active_users:'日活跃用户',uploaded_records:'业务上传记录数',uploaded_bytes:'业务上传字节数',upload_failures:'业务上传失败次数',cohort_users:'留存批次新增人数',retained_d1:'该批次次日留存人数',retained_d7:'该批次 7 日留存人数'};
@@ -22,7 +23,7 @@ export default function MarketPage({standalone=false, route, navigate}){
  const [localRoute, setLocalRoute] = useState({});
  const view = route || localRoute;
  const tab = marketTabs.some(([id]) => id === view.tab) ? view.tab : 'board';
- const days = ['7','30','90','all'].includes(view.days) ? view.days : '30';
+ const days = ['7','30','90','all','custom'].includes(view.days) ? view.days : '7';
  const detailDate = tab === 'metrics' && /^\d{4}-\d{2}-\d{2}$/.test(view.date || '') ? view.date : '';
  const connections = useRef(null);
  function go(patch) {
@@ -41,6 +42,8 @@ export default function MarketPage({standalone=false, route, navigate}){
  const orderedIds=applyOrder(Object.keys(stores),storeOrder);
  const channel = orderedIds.includes(view.channel) ? view.channel : 'all';
  const shownIds = channel === 'all' ? orderedIds : [channel];
+ const selectedDetailIds = (view.series || '').split(',').filter(id => orderedIds.includes(id));
+ const detailIds = tab === 'metrics' && selectedDetailIds.length ? selectedDetailIds : shownIds;
  function moveStore(from,to){const next=moveItem(orderedIds,from,to);setStoreOrder(next);try{localStorage.setItem('ai-hub-market-order',JSON.stringify(next));}catch{/* 顺序只留在这台机器 */}}
  function dragStart(event,id){event.dataTransfer.setData('text/plain',id);event.dataTransfer.effectAllowed='move';}
  function dragOver(event,id){event.preventDefault();setDropStore(id);}
@@ -51,13 +54,14 @@ export default function MarketPage({standalone=false, route, navigate}){
  function beginImport(){setModal('import');setKind('metrics');setCsv('');setPreview(null);setMessage('');setError('');}
  async function importCsv(apply=false){setSaving(true);setError('');try{const r=await api('import',{kind,csv,revision:apply?preview.revision:data.revision,apply});if(apply){setData(r.snapshot);setModal(null);setMessage(`导入完成，实际更新 ${r.changed} 条记录`);}else setPreview(r);}catch(e){setError(e.message);}finally{setSaving(false);}}
  async function toggleScreen(){if(screen){setScreen(false);if(document.fullscreenElement)await document.exitFullscreen?.();}else{setScreen(true);try{await document.documentElement.requestFullscreen?.();}catch{/* WKWebView 保留宽屏布局。 */}}}
- const end = today();
- const since = days === 'all' ? '0000-00-00' : shiftDate(end, 1 - Number(days));
+ const dateOK = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') && !Number.isNaN(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0,10) === value;
+ const end = days === 'custom' && dateOK(view.to) && view.to <= today() ? view.to : today();
+ const since = days === 'all' ? '0000-00-00' : days === 'custom' && dateOK(view.from) ? view.from : shiftDate(end, 1 - Number(days === 'custom' ? 7 : days));
  const metrics = data?.metrics || [];
  const rows = metrics.filter(row => row.date >= since && row.date <= end);
  const storeRows = rows.filter(row => shownIds.includes(row.channel));
  const detailRows = (detailDate ? metrics.filter(row => row.date === detailDate) : rows)
-   .filter(row => shownIds.includes(row.channel) || (!detailDate && row.channel === 'all'))
+   .filter(row => detailIds.includes(row.channel) || (!detailDate && !selectedDetailIds.length && row.channel === 'all'))
    .sort((a, b) => b.date.localeCompare(a.date));
  const reviews = (data?.reviews || []).filter(row => row.date >= since && row.date <= end && shownIds.includes(row.channel)).sort((a, b) => b.date.localeCompare(a.date));
  const trends = {};
@@ -82,17 +86,18 @@ export default function MarketPage({standalone=false, route, navigate}){
  }, [ready, alertFocus, channel]);
  async function collect(operation='sync',provider='oppo'){setError('');const name=stores[provider]||provider;try{const r=await api('collect',{operation,provider});setMessage(operation==='login'?`请在 ${name} 官方专用窗口完成登录；登录和数据接通状态分别核对。`:operation==='pause'?`已暂停 ${name} 定时同步`:operation==='resume'?`已启用 ${name} 每 30 分钟自动同步`:r.started?`已开始查询 ${name} 后台，完成后自动更新页面`:'该平台已有任务在运行');await refresh();}catch(e){setError(e.message);}}
  useEffect(()=>{if(!collecting)return;const timer=setInterval(refresh,3000);return()=>clearInterval(timer);},[collecting]);
- return <section className={`market ${screen?'market-screen':''} ${standalone?'market-standalone':''}`}>
+ return <section className={`market ${tab==='board'?'market-board-view':''} ${screen?'market-screen':''} ${standalone?'market-standalone':''}`}>
   <header className="market-head"><div><h1>应用运营<span>.</span></h1><p>com.jryx.isho <span>·</span> 版本、增长与业务数据，在同一个视野里。</p></div><div className="market-actions"><button onClick={()=>{setModal('guide');setError('');}}>数据接入说明</button><button onClick={refresh} disabled={loading}><RefreshCw size={15}/>{loading?'读取中…':'刷新记录'}</button><button onClick={toggleScreen}><Expand size={15}/>{screen?'退出大屏':'大屏模式'}</button>{!screen&&!readonly&&<button className="market-primary" onClick={beginImport}><FileUp size={15}/>导入报表</button>}</div></header>
   {error&&<div className="market-alert" role="alert">{error}</div>}{message&&<div className="market-success" role="status"><Check size={15}/>{message}</div>}
   {!!problems.length && <div className="market-alert market-alert-links" role="status"><span>渠道需要处理</span>{problems.map(id => <button className="button" type="button" key={id} onClick={() => go({ tab: 'channels', channel: id, alert: '1', date: '' })}>{stores[id]} · {storeAlerts[providers[id].state]}<ArrowUpRight size={13}/></button>)}</div>}
   {data?<><div className="market-source"><span><Database size={14}/>{data.connection.label}{readonly?' · 只读':''}</span><span>读取于 {time(data.generated_at)} · 页面可见时每分钟重读</span></div>
-  <div className="market-filters"><div className="market-tabs">{marketTabs.map(([id,label])=><button key={id} className={tab===id?'selected':''} onClick={()=>go({ tab: id, date: '', alert: '' })}>{label}</button>)}</div><div><select aria-label="渠道筛选" value={channel} onChange={e=>go({ channel: e.target.value, alert: '' })}><option value="all">全部商店</option>{orderedIds.map(id=><option key={id} value={id}>{stores[id]}</option>)}</select><select aria-label="日期范围" value={days} onChange={e=>go({ days: e.target.value, date: '' })}>{[['7','近 7 天'],['30','近 30 天'],['90','近 90 天'],['all','全部历史']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div></div>
-  {tab==='board'&&<><MonitorBoard points={points} stores={stores} orderedIds={shownIds} channel={channel} start={days === 'all' ? points[0]?.date || end : since} end={end}
-    onStore={id => go({ channel: id, alert: '' })} onDay={(date, id = channel) => go({ tab: 'metrics', date, channel: id, alert: '' })}/><ReviewStrip reviews={reviews} orderedIds={shownIds} stores={stores}/></>}
+  <div className="market-filters"><div className="market-tabs">{marketTabs.map(([id,label])=><button key={id} className={tab===id?'selected':''} onClick={()=>go({ tab: id, date: '', alert: '' })}>{label}</button>)}</div><div><select aria-label="渠道筛选" value={channel} onChange={e=>go({ channel: e.target.value, series: '', alert: '' })}><option value="all">全部商店</option>{orderedIds.map(id=><option key={id} value={id}>{stores[id]}</option>)}</select><select aria-label="日期范围" value={days} onChange={e=>go({ days: e.target.value, date: '', ...(e.target.value === 'custom' ? {from: shiftDate(today(),-29),to: today()} : {from:'',to:''}) })}>{[['7','近 7 天'],['30','近 30 天'],['90','近 90 天'],['all','全部历史'],['custom','自定义日期']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div></div>
+  {days === 'custom' && <div className="market-custom-range"><label>开始日期<input type="date" aria-label="运营开始日期" value={view.from || ''} max={end} onChange={e=>go({from:e.target.value,date:''})}/></label><span>至</span><label>结束日期<input type="date" aria-label="运营结束日期" value={view.to || ''} min={view.from || ''} max={today()} onChange={e=>go({to:e.target.value,date:''})}/></label>{since > end && <span role="alert">开始日期不能晚于结束日期</span>}</div>}
+  {tab==='board'&&<><MarketDashboard points={points} stores={stores} orderedIds={shownIds} start={days === 'all' ? points[0]?.date || end : since} end={end}
+    onRange={(from,to,ids) => go({ tab: 'metrics', days: 'custom', from, to, date: from === to ? from : '', channel: ids.length === 1 ? ids[0] : 'all', series: ids.join(','), alert: '' })}/><ReviewStrip reviews={reviews} orderedIds={shownIds} stores={stores}/></>}
   {tab==='channels'&&<><div className="market-panel"><div className="market-section-title"><h2>渠道上架进度</h2><span>线上版本与当前提审流程分开核对</span></div><div className="market-channel-grid">{[...data.channels].filter(c=>channel==='all'||c.channel===channel).sort((a,b)=>orderedIds.indexOf(a.channel)-orderedIds.indexOf(b.channel)).map(c=><article key={c.channel} className={'market-channel'+(dropStore===c.channel?' is-drop':'')} onDragOver={e=>dragOver(e,c.channel)} onDragLeave={e=>dragLeave(e,c.channel)} onDrop={e=>dropOn(e,c.channel)}><header><button type="button" className="market-drag" draggable aria-label={'拖动调整'+stores[c.channel]+'的顺序'} onDragStart={e=>dragStart(e,c.channel)}><GripVertical size={16}/></button><div className={'market-brand '+c.channel}>{stores[c.channel].slice(0,1)}</div><h3>{stores[c.channel]}</h3><span className={'market-status '+c.status}>{statuses[c.status]}</span></header><dl><div><dt>线上版本</dt><dd>{c.live_version||'待核实'}{c.live_code!=null&&<small> ({c.live_code})</small>}</dd></div><div><dt>更新版本</dt><dd>{c.pending_version||'未记录'}{c.pending_code!=null&&<small> ({c.pending_code})</small>}</dd></div><div><dt>提交 / 上架</dt><dd>{c.submitted_at||'—'} / {c.released_at||'—'}</dd></div><div><dt>商店评分</dt><dd>{c.rating==null?'待核实':`${c.rating} / 5`}{c.rating_count!=null&&<small> · {number(c.rating_count)} 次评分</small>}</dd></div></dl>{c.reason&&<p className="market-reason">{c.reason}</p>}<p className="market-caption">核对日期：{c.as_of||'尚未提供'}<br/>保存时间：{time(c.updated_at)}</p><footer>{!readonly&&!screen&&<button onClick={()=>edit('channels',c)}>更新进度</button>}{c.url&&<a target="_blank" rel="noreferrer" href={c.url}>商店页面<ArrowUpRight size={13}/></a>}</footer></article>)}</div></div>
   <section className="market-platform-connections" aria-label="商店连接" ref={connections}><div className="market-section-title"><h2>商店连接</h2><span>拖动左侧手柄调整顺序 · 登录会话各自隔离</span></div><div className="market-provider-grid">{(alertFocus && channel === 'all' && problems.length ? problems : shownIds).map(id=>{const name=stores[id];const c=providers[id]||{state:'needs_login'};const busy=c.state==='running';const connected=!!(c.last_success||c.last_partial_success);const statusText=(({ready:'同步成功',partial:'部分同步',running:'处理中',needs_login:connected?'需要重新登录':'待登录核实',needs_adapter:'待接通数据',profile_busy:'专用窗口使用中',browser_missing:'采集浏览器缺失',read_failed:'读取失败',app_not_found:'未找到 ISHO',access_denied:'权限不足',developer_unverified:'需企业／团队权限',auth_restore_failed:'会话需重新登录',auth_key_unavailable:'钥匙串不可用',interrupted:'上次任务中断',manual:'尚未启用'})[c.state]||'待核实');const reasonText=c.reason||'请先在官方页面完成登录，再核对 ISHO 的数据权限。';return <article key={id} tabIndex={-1} className={'market-provider '+(alertFocus?'is-target ':'')+(c.state==='ready'?'is-ready':'')+(dropStore===id?' is-drop':'')} onDragOver={e=>dragOver(e,id)} onDragLeave={e=>dragLeave(e,id)} onDrop={e=>dropOn(e,id)}><header><button type="button" className="market-drag" draggable aria-label={'拖动调整'+name+'的顺序'} onDragStart={e=>dragStart(e,id)}><GripVertical size={16}/></button><strong>{name}</strong><span>{statusText}</span></header><p>{reasonText}</p>{c.last_attempt && <small>最近检查 {time(c.last_attempt)}{c.last_finished ? ` · 完成 ${time(c.last_finished)}` : ''}</small>}<small>最近完整同步 {c.last_success ? time(c.last_success) : '尚未完成'}</small>{c.last_partial_success && <small>最近部分同步 {time(c.last_partial_success)}</small>}<div className="market-actions">{!readonly&&data.connection.mode==='local'&&<><button disabled={busy} className={connected?'':'market-primary'} onClick={()=>collect('login',id)}>{busy?'处理中…':c.state==='developer_unverified'?'切换企业／团队':connected?'重新登录':'登录后台'}</button><button disabled={busy} onClick={()=>collect('sync',id)}>同步 {name}</button>{connected&&<button disabled={busy} onClick={()=>collect(c.automatic?'pause':'resume',id)}>{c.automatic?'暂停自动':'启用自动'}</button>}</>}</div>{Object.keys(c.parts||{}).length>0&&<small>{Object.entries(c.parts).map(([key,p])=>`${({channels:'版本审核',downloads:'下载',reviews:'评论'})[key]||key}：${p.state==='ok'?`已读${p.count!=null?' '+p.count+' 条':''}`:p.state==='unsupported'?'待核实':p.state==='needs_login'?'需登录':'读取失败'}`).join(' · ')}</small>}</article>;})}</div><p className="market-caption">版本、审核、下载和评论按实际权限分别核实；登录窗口打开不代表数据已接通。业务新增、日活与上传数据仍待业务接口接入。</p></section></>}
-  {tab==='metrics'&&<div className="market-panel"><div className="market-section-title"><h2>数据明细</h2><div><button onClick={()=>download([data.fields.metrics.join(','),...detailRows.map(r=>data.fields.metrics.map(f=>csvValue(r[f])).join(','))].join('\r\n'),'isho-metrics.csv')}><ArrowDownToLine size={14}/>导出范围内明细</button>{!readonly&&<button className="market-primary" onClick={()=>edit('metrics')}>录入数据</button>}</div></div>{detailDate && <div className="market-date-chip"><strong>{detailDate} · {stores[channel] || '全部商店'}</strong><button className="button" onClick={() => go({ date: '' })}><X size={14}/>清除日期</button></div>}<p className="market-caption">下载量按商店记录；新增、日活和上传量使用全应用 all 口径。活跃人数不跨日期累加。空值表示未知。</p><div className="market-table-scroll"><table><thead><tr><th>日期 / 来源</th><th>范围</th>{Object.entries(counts).map(([id,n])=><th key={id}>{n}</th>)}{!readonly&&<th>操作</th>}</tr></thead><tbody>{detailRows.map(r=><tr key={r.date+r.channel}><td>{r.date}<small>{r.source}</small></td><td>{stores[r.channel]||'全应用'}</td>{Object.keys(counts).map(k=><td key={k}>{number(r[k])}</td>)}{!readonly&&<td><button onClick={()=>edit('metrics',r)}>编辑</button></td>}</tr>)}</tbody></table></div>{!detailRows.length && <Empty text={detailDate ? "该日期与渠道没有明细记录。" : "所选渠道和日期范围暂无运营记录。"}/>}</div>}
+  {tab==='metrics'&&<div className="market-panel"><div className="market-section-title"><h2>数据明细</h2><div><button onClick={()=>download([data.fields.metrics.join(','),...detailRows.map(r=>data.fields.metrics.map(f=>csvValue(r[f])).join(','))].join('\r\n'),'isho-metrics.csv')}><ArrowDownToLine size={14}/>导出范围内明细</button>{!readonly&&<button className="market-primary" onClick={()=>edit('metrics')}>录入数据</button>}</div></div>{selectedDetailIds.length > 0 && <div className="market-date-chip"><span>所选渠道：{detailIds.map(id => stores[id]).join('、')}</span><button type="button" className="button" onClick={() => go({series:'',channel:'all'})}>显示全部渠道</button></div>}{detailDate && <div className="market-date-chip"><strong>{detailDate} · {stores[channel] || '全部商店'}</strong><button className="button" onClick={() => go({ date: '' })}><X size={14}/>清除日期</button></div>}<p className="market-caption">下载量按商店记录；新增、日活和上传量使用全应用 all 口径。活跃人数不跨日期累加。空值表示未知。</p><div className="market-table-scroll"><table><thead><tr><th>日期 / 来源</th><th>范围</th>{Object.entries(counts).map(([id,n])=><th key={id}>{n}</th>)}{!readonly&&<th>操作</th>}</tr></thead><tbody>{detailRows.map(r=><tr key={r.date+r.channel}><td>{r.date}<small>{r.source}</small></td><td>{stores[r.channel]||'全应用'}</td>{Object.keys(counts).map(k=><td key={k}>{number(r[k])}</td>)}{!readonly&&<td><button onClick={()=>edit('metrics',r)}>编辑</button></td>}</tr>)}</tbody></table></div>{!detailRows.length && <Empty text={detailDate ? "该日期与渠道没有明细记录。" : "所选渠道和日期范围暂无运营记录。"}/>}</div>}
   {tab==='reviews'&&<div className="market-panel"><div className="market-section-title"><h2>用户评价</h2><span>当前已采集 {reviews.length} 条 · 样本好评为 4–5 星</span>{!readonly&&<button className="market-primary" onClick={()=>edit('reviews',{channel:channel==='all'?'oppo':channel})}>录入评论</button>}</div>{reviews.map(r=><article key={r.channel+r.external_id} className="market-review"><header><strong>{stores[r.channel]}</strong><span className="market-stars">{'★'.repeat(r.rating)}{'☆'.repeat(5-r.rating)}</span><small>{r.date} · {r.version||'版本未知'}</small>{!readonly&&<button onClick={()=>edit('reviews',r)}>编辑</button>}</header><p>{r.body||'无文字内容'}</p><small>来源：{r.source} · ID：{r.external_id}</small></article>)}{!reviews.length&&<Empty text="还没有采集到评论；这里不会用示例评论代替。"/>}</div>}
   {tab==='history'&&<div className="market-panel"><div className="market-section-title"><h2>最近 20 次数据变更</h2><span>保存与导入均保留原值，供服务端追溯</span></div>{data.history.map(r=><div className="market-history" key={r.id}><Check size={15}/><strong>{({channels:'上架进度',metrics:'数据明细',reviews:'用户评价',sync:'商店自动同步'})[r.action]}</strong><span>{time(r.at)}</span><small>{r.actor.endsWith('-collector')?(stores[r.actor.slice(0,-10)]||'商店')+' 只读采集器':r.actor==='admin'?'服务器管理员':'本机维护'}</small></div>)}{!data.history.length&&<Empty text="尚未修改运营数据。"/>}</div>}
   </>:!error&&<Empty text="正在连接运营数据…"/>}
@@ -103,52 +108,6 @@ export default function MarketPage({standalone=false, route, navigate}){
 }
 function Empty({text}){return <div className="market-empty"><Database size={25}/><p>{text}</p></div>;}
 
-function percentText(ratio) {
-  const percent = Math.round(Math.abs(ratio) * 100);
-  return percent === 0 ? '较前一日持平' : `较前一日${ratio < 0 ? '少' : '多'} ${percent}%`;
-}
-
-function MonitorBoard({points, stores, orderedIds, channel, start, end, onStore, onDay}) {
-  const [onlyActive, setOnlyActive] = useState(false);
-  const board = buildBoard(points, orderedIds);
-  const days = calendarPoints(points, start, end, onlyActive);
-  const latest = board.latest;
-  const cover = `已记录 ${board.covered.length}/${orderedIds.length} 个渠道`;
-  const note = board.change == null ? board.comparison + '，暂不计算涨跌' : percentText(board.change);
-  const label = stores[channel] || '所选渠道';
-  return <div className="market-board">
-    <p className={'market-callout' + (board.change != null && board.change < 0 ? ' is-down' : '')} role="status">
-      {latest ? <>{latest.date} · {label}下载 {number(latest.total)} 次 · {cover} · {note}。区间已记录 {number(board.total)} 次。{latest.date < end && ` 最近数据截至 ${latest.date}。`}</> : '所选范围内暂无下载记录。'}
-    </p>
-    <div className="market-board-stats" role="group" aria-label="按渠道查看下载">
-      <button type="button" className="selected" onClick={() => latest && onDay(latest.date)} disabled={!latest}><span>{stores[channel] || '渠道合计'} · 最近记录</span><strong>{number(latest?.total)}</strong><small>{cover} · 查看明细</small></button>
-      {channel !== 'all' && <button type="button" onClick={() => onStore('all')}><span>全部商店</span><small>返回渠道合计</small></button>}
-      {channel === 'all' && board.stores.map(store => <button type="button" key={store.id} onClick={() => onStore(store.id)}><span><i className={'market-seg ' + store.id}/>{stores[store.id] || store.id}</span><strong>{number(store.latest)}</strong><small>{store.latest == null ? '最近日期缺少记录' : store.change == null ? '前日缺记录或为 0' : percentText(store.change)} · 区间 {number(store.total)}</small></button>)}
-    </div>
-    <div className="market-panel">
-      <div className="market-section-title"><h2>每日下载</h2><button type="button" className="button" aria-pressed={onlyActive} onClick={() => setOnlyActive(value => !value)}>{onlyActive ? '显示完整日历' : '只看有下载的日期'}</button></div>
-      {days.length ? <BoardChart days={days} orderedIds={orderedIds} onDay={onDay}/> : <p className="market-caption">所选范围暂无有下载的日期。</p>}
-      <p className="market-caption">点击日期看明细。0 表示已记录零次，— 表示缺少记录。最近日期与前一天的渠道覆盖相同才计算变化。图中最多展示最近 366 天。</p>
-    </div>
-    {!!points.length && <div className="market-panel"><div className="market-section-title"><h2>渠道下载记录</h2><span>选日期或具体渠道查看明细</span></div><div className="market-table-scroll"><table className="market-board-table"><thead><tr><th>日期</th><th>已记录合计</th>{orderedIds.map(id => <th key={id}>{stores[id] || id}</th>)}</tr></thead><tbody>
-      {[...(onlyActive ? board.active : points)].reverse().map(day => <tr key={day.date}><td><button type="button" className="market-drill" onClick={() => onDay(day.date)}>{day.date}</button></td><td>{number(day.total)}</td>{orderedIds.map(id => <td key={id}>{day.parts[id] == null ? '—' : <button type="button" className="market-drill" aria-label={day.date + ' ' + stores[id] + ' 下载明细'} onClick={() => onDay(day.date, id)}>{number(day.parts[id])}</button>}</td>)}</tr>)}
-    </tbody></table></div></div>}
-  </div>;
-}
-
-function BoardChart({days, orderedIds, onDay}) {
-  const max = days.reduce((highest, day) => Math.max(highest, day.total || 0), 1);
-  return <div className="market-board-chart">{days.map(day => {
-    const covered = orderedIds.filter(id => day.parts[id] != null);
-    const label = day.total == null ? '缺少记录' : `${number(day.total)} 次 · ${covered.length}/${orderedIds.length} 个渠道`;
-    return <button type="button" key={day.date} className={'market-board-col ' + (day.total == null ? 'is-missing' : day.total === 0 ? 'is-zero' : '')}
-      aria-label={day.date + ' ' + label} title={day.date + ' · ' + label} onClick={() => onDay(day.date)}>
-      <b>{number(day.total)}</b><span className="market-trend-stack" style={{ height: day.total > 0 ? Math.max(5, day.total / max * 158) + 'px' : '4px' }}>
-        {covered.filter(id => day.parts[id] > 0).map(id => <i key={id} className={'market-seg ' + id} style={{ flexGrow: day.parts[id] }}/>)}
-      </span><small>{day.date.slice(5)}</small>
-    </button>;
-  })}</div>;
-}
 function ReviewStrip({reviews,orderedIds,stores}){
  const groups={};for(const review of reviews){const group=groups[review.channel]||(groups[review.channel]={n:0,pos:0,sum:0});group.n+=1;group.sum+=review.rating;if(review.rating>=4)group.pos+=1;}
  const ids=orderedIds.filter(id=>groups[id]);
