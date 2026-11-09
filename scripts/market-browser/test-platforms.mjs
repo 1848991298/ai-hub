@@ -13,3 +13,22 @@ test('认证检查点只接受指定平台的授权响应，拒绝错误与外�
 import {captureSessions,watchAuthentication} from './auth.mjs';
 test('同源多个标签合并会话键，统计页不能抹掉主控制台状态；其他源不采集',async()=>{const frame=(url,value)=>({url:()=>url,evaluate:async()=>value});const c={pages:()=>[{frames:()=>[frame('https://dev.mi.com/console',{fixtureAuth:'private-fixture',shared:'a'})]},{frames:()=>[frame('https://dev.mi.com/comment',{tracking:'b'}),frame('https://untrusted.example/',{other:'never'})]}]};assert.deepEqual(await captureSessions(c,'https://dev.mi.com'),{'https://dev.mi.com':{fixtureAuth:'private-fixture',shared:'a',tracking:'b'}});});
 test('已确认会话保存后，结束采集不重新覆盖检查点',async()=>{let observer,saves=0;const c={on:(_,fn)=>{observer=fn;},off:()=>{}};const watcher=watchAuthentication(c,'fixture-root','vivo',async()=>{saves++;});await observer({url:()=> 'https://dev.vivo.com.cn/webapi/app/list-app',json:async()=>({code:0,data:[{packageName:'com.jryx.isho'}]})});await new Promise(r=>setTimeout(r,1100));assert.equal(saves,1);await watcher.finish();assert.equal(saves,1);});
+
+import {result,finish} from './adapters/common.mjs';
+import {collect as tencent} from './adapters/tencent.mjs';
+test('应用宝 HTTP 200 的 code -7 是登录失败，不冒充应用不存在或部分成功',async()=>{
+ const page={url:()=> 'https://app.open.qq.com/p/home',evaluate:async()=>({value:{code:-7,message:'type:business, code:-7, msg:request auth fail'},http_status:200})};
+ const v=await tencent({page});assert.equal(v.state,'needs_login');assert.equal(v.parts.channels.reason,'authentication_failed');assert.equal(v.parts.channels.business_code,-7);assert.equal(v.parts.downloads.state,'needs_login');assert.deepEqual(v.rows,{channels:[],metrics:[],reviews:[]});
+});
+test('应用宝错误诊断隐藏链接和长标识，错误包名仍停止数据读取',async()=>{
+ const denied=await tencent({page:{url:()=> 'https://app.open.qq.com/p/home',evaluate:async()=>({value:{code:403,message:'permission denied https://example.com/?token=fixture xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'},http_status:200})}});
+ assert.equal(denied.state,'access_denied');assert.ok(!denied.parts.channels.detail.includes('token='));assert.ok(!denied.parts.channels.detail.includes('xxxxxxxx'));
+ const mismatch=await tencent({page:{url:()=> 'https://app.open.qq.com/p/home',evaluate:async()=>({value:{app_id:'1112464281',package_name:'other'},http_status:200})}});
+ assert.equal(mismatch.state,'app_not_found');assert.equal(mismatch.rows.channels.length,0);
+});
+test('零成功分项不能标记部分同步，登录失败给出重登录状态',()=>{
+ const failed=result('tencent');failed.parts={channels:{state:'read_failed'},downloads:{state:'read_failed'},reviews:{state:'unsupported'}};
+ assert.equal(finish(failed).state,'read_failed');
+ failed.parts.channels={state:'needs_login'};assert.equal(finish(failed).state,'needs_login');
+ failed.parts.channels={state:'ok'};assert.equal(finish(failed).state,'partial');
+});

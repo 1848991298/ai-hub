@@ -23,7 +23,7 @@ try{
    if(login&&Date.now()<deadline&&(new URL(page.url()).origin!==new URL(PORTALS[provider].url).origin||/\/login(?:[/?]|$)/i.test(new URL(page.url()).pathname))){settled=false;await page.waitForTimeout(1000);continue;}
    if(login&&new URL(page.url()).pathname.startsWith('/cn/verify')){output.state='developer_unverified';if(!output.auth_saved){await saveAuth(context,root,provider);output.auth_saved=true;}if(Date.now()>deadline)throw new Error('developer_unverified');await page.waitForTimeout(1000);continue;}
    if(login&&!settled){await page.waitForTimeout(4000);settled=true;}
-   try{const v=await adapter.collect({page,context,provider,root});Object.assign(output,v);if(Object.values(v.parts||{}).some(p=>p.state==='ok')&&!Object.values(v.parts||{}).some(p=>p.state==='needs_login'))await saveAuth(context,root,provider);break;}
+   try{const v=await adapter.collect({page,context,provider,root});Object.assign(output,v);if(login&&v.state==='needs_login'&&!Object.values(v.parts||{}).some(p=>p.state==='ok')&&Date.now()<deadline&&!page.isClosed()){await page.waitForTimeout(3000);continue;}if(Object.values(v.parts||{}).some(p=>p.state==='ok')&&!Object.values(v.parts||{}).some(p=>p.state==='needs_login'))await saveAuth(context,root,provider);break;}
    catch(e){
     if(!login||Date.now()>deadline||page.isClosed())throw e;
     // 登录完成但团队初始化或业务页查询暂未就绪时保留窗口，避免让用户重复登录。

@@ -62,6 +62,18 @@ class CollectorTests(unittest.TestCase):
   with patch('market_collect.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(payload))):vivo.run(open(self.root/'.local/vivo-test.lock','a'),False)
   self.assertTrue(vivo.enabled());self.assertTrue(vivo.stored()['last_partial_success']);self.assertNotIn('last_success',vivo.stored())
   self.assertFalse(self.collector.enabled())
+ def test_all_failed_partial_result_keeps_history_and_does_not_claim_success(self):
+  from types import SimpleNamespace
+  collector=MarketCollector(self.root,self.service,'tencent')
+  collector.persist({'state':'partial','last_partial_success':'2026-11-03T12:00:00+08:00','parts':{'channels':{'state':'read_failed'}}})
+  self.assertEqual(collector.snapshot()['state'],'read_failed')
+  before=self.service.snapshot()['revision']
+  payload={'provider':'tencent','package':'com.jryx.isho','state':'partial','rows':{'channels':[],'metrics':[],'reviews':[]},'parts':{'channels':{'state':'read_failed'},'downloads':{'state':'read_failed'},'reviews':{'state':'unsupported'}}}
+  with patch('market_collect.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(payload))):collector.run(open(self.root/'.local/tencent-test.lock','a'),False)
+  self.assertEqual(collector.stored()['state'],'read_failed')
+  self.assertEqual(collector.stored()['last_partial_success'],'2026-11-03T12:00:00+08:00')
+  self.assertEqual(self.service.snapshot()['revision'],before)
+  self.assertFalse(collector.enabled())
  def test_sync_once_respects_explicit_pause(self):
   from types import SimpleNamespace
   vivo=MarketCollector(self.root,self.service,'vivo');vivo.enable(False)

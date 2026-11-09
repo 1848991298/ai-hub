@@ -66,7 +66,11 @@ class MarketCollector:
   if not state and not self.enabled():state={'state':'needs_login' if self.provider!='oppo' else 'manual'}
   if state.get('state')=='running' and not running:state={**state,'state':'interrupted'}
   messages={'ready':'OPPO 版本、审核、每日下载量与评论已自动同步（下载口径见数据来源）。','partial':'OPPO 部分数据同步成功；未成功的部分保留上次记录。','needs_login':'请在 OPPO 官方窗口完成登录并核实 ISHO 查询权限；无需上传报表。','profile_busy':'OPPO 专用浏览器正在使用，请关闭该窗口后重试。','read_failed':'OPPO 暂时读取失败，已保留上次数据；稍后自动重试。','running':'正在读取 OPPO 登录后台…','needs_adapter':'浏览器会话已保留；登录与 ISHO 数据权限尚待核实，未标记同步成功。','app_not_found':'未找到 com.jryx.isho，请核对登录账号所属团队与应用权限。','access_denied':'该账号尚无应用数据查询权限。','developer_unverified':'当前荣耀会话进入实名认证视图；请先切换 ISHO 已认证企业／团队，再核实应用查询权限。','auth_restore_failed':'本机会话无法恢复，请重新登录该平台。','auth_key_unavailable':'无法访问本机登录钥匙串，请检查系统权限后重试。','interrupted':'上次采集被中断，已保留上次成功数据。'}
-  return {**state,'provider':self.provider,'name':self.name,'state':'running' if running else state.get('state','waiting'),'reason':messages.get('running' if running else state.get('state'),'OPPO 等待首次自动同步。').replace('OPPO',self.name),'automatic':scheduled,'interval_seconds':INTERVAL,'scope':'本机 Hub 服务运行期间定时同步；仅已验证的数据源标记为已接入。'}
+  shown='running' if running else state.get('state','waiting')
+  if shown in ('ready','partial') and state.get('parts') and not any(p.get('state')=='ok' for p in state['parts'].values()):
+   shown='needs_login' if any(p.get('state')=='needs_login' for p in state['parts'].values()) else 'read_failed'
+  reason=messages.get(shown,'OPPO 等待首次自动同步。').replace('OPPO',self.name)
+  return {**state,'provider':self.provider,'name':self.name,'state':shown,'reason':reason,'automatic':scheduled,'interval_seconds':INTERVAL,'scope':'本机 Hub 服务运行期间定时同步；仅已验证的数据源标记为已接入。'}
  def control(self,body):
   if not isinstance(body,dict) or set(body)!={'operation'} or body['operation'] not in ('sync','login','pause','resume'):raise MarketError('同步参数不合法。')
   operation=body['operation']
@@ -94,6 +98,8 @@ class MarketCollector:
    if payload.get('provider')!=self.provider or payload.get('package')!='com.jryx.isho' or (self.provider=='oppo' and payload.get('app_id')!='37892440'):raise ValueError('binding mismatch')
    current=payload.get('state');allowed={'ready','partial','needs_login','profile_busy','read_failed','needs_adapter','app_not_found','access_denied','developer_unverified','auth_restore_failed','auth_key_unavailable'}
    if current not in allowed:raise ValueError('invalid state')
+   if current in ('ready','partial') and not any(part.get('state')=='ok' for part in payload.get('parts',{}).values()):
+    current='needs_login' if any(part.get('state')=='needs_login' for part in payload.get('parts',{}).values()) else 'read_failed'
    changed=0
    if current in ('ready','partial'):
     changed=self.service.ingest_provider(self.provider,payload['rows'])
