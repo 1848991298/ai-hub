@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
+import { columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, stretchLastColumn, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
 
 const rows = [
   { id: 'a', content: '过期未结束', status: '未启动', priority: 'P1', due: '2026-10-01', created_at: '2026-10-01 09:00', note: '' },
@@ -132,4 +132,38 @@ test('自适应优先扩大正文列，窄窗口保留可读宽度并允许横�
   const withoutNote=fillColumnWidths(1500,ledgerColumnOrder.filter(k=>k!=='note'));
   assert.equal(Object.values(withoutNote).reduce((a,b)=>a+b,0),1500);
   assert.ok(!Object.hasOwn(withoutNote,'note'));
+});
+
+
+test('手动缩窄或放大首列时仅末列吸收余量', () => {
+  const fixed = columnWidths();
+  const baseline = stretchLastColumn(fixed, 1800);
+  for (const content of [80, 900]) {
+    const result = stretchLastColumn({ ...fixed, content }, 1800);
+    assert.equal(result.content, content);
+    assert.equal(result.note, baseline.note + fixed.content - content);
+    assert.equal(Object.values(result).reduce((a, b) => a + b, 0), 1800);
+    for (const key of ledgerColumnOrder.filter(key => !['content', 'note'].includes(key))) assert.equal(result[key], fixed[key]);
+  }
+});
+
+test('末列按真实最小宽度收缩，空间不足时保持固定列并局部溢出', () => {
+  const fixed = { ...columnWidths(), content: 1500, note: 1600 };
+  const result = stretchLastColumn(fixed, 1800);
+  assert.equal(result.content, 1500);
+  assert.equal(result.note, ledgerColumnLimits.note[0]);
+  assert.ok(Object.values(result).reduce((a, b) => a + b, 0) > 1800);
+  const normal = stretchLastColumn({ ...fixed, content: 900 }, 1800);
+  assert.equal(Object.values(normal).reduce((a, b) => a + b, 0), 1800);
+});
+
+test('换列序或隐藏标签后由最后可见列补齐，窗口变化不改固定列', () => {
+  const keys = ledgerColumnOrder.filter(key => !['tags', 'content'].includes(key)).concat('content');
+  const fixed = columnWidths();
+  const small = stretchLastColumn(fixed, 1200, keys);
+  const large = stretchLastColumn(fixed, 2000, keys);
+  assert.equal(large.content - small.content, 800);
+  assert.ok(!Object.hasOwn(large, 'tags'));
+  for (const key of keys.slice(0, -1)) assert.equal(large[key], small[key]);
+  assert.deepEqual(stretchLastColumn(fixed, 100, []), {});
 });

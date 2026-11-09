@@ -154,7 +154,7 @@ export function columnWidths(saved) {
   }));
 }
 
-// 适配仅在用户主动选择时执行；手动列宽不受视口变化或剩余空间影响。
+// 按当前宽度比例主动适配；末列自动补齐由 stretchLastColumn 单独处理。
 export function fitColumnWidths(widths, available, keys = ledgerColumnOrder) {
   const minimum = keys.reduce((sum, key) => sum + ledgerColumnLimits[key][0], 0);
   const preferred = keys.reduce((sum, key) => sum + widths[key], 0);
@@ -181,5 +181,15 @@ export function fillColumnWidths(available, keys = ledgerColumnOrder) {
     const add = Math.min(extra, ledgerColumnLimits[key][1] - result[key]);
     result[key] += add; extra -= add;
   }
+  return result;
+}
+
+// 保留前面各列的手动宽度，末列吸收余量；放不下时仅保留末列最小宽度。
+export function stretchLastColumn(widths, available, keys = ledgerColumnOrder) {
+  const result = Object.fromEntries(keys.map(key => [key, widths[key]]));
+  const last = keys.at(-1);
+  if (!last) return result;
+  const fixed = keys.slice(0, -1).reduce((sum, key) => sum + result[key], 0);
+  result[last] = Math.max(ledgerColumnLimits[last][0], Math.floor(available) - fixed);
   return result;
 }

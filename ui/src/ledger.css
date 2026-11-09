@@ -214,3 +214,7 @@
 @media(prefers-reduced-motion:reduce){.ledger-column-panel{animation:none}}
 .ledger-width-mode{font-size:var(--text-sm)}
 .ledger-width-mode button{white-space:nowrap}
+
+.ledger-auto-width{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:10px;font-weight:500;color:var(--text-muted);pointer-events:none}
+.ledger th:has(.ledger-auto-width) .ledger-th-inner{padding-right:28px}
+.ledger-column-panel input:disabled{color:var(--text-muted);border-style:dashed;cursor:default}
