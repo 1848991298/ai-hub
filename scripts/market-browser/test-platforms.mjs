@@ -32,3 +32,9 @@ test('零成功分项不能标记部分同步，登录失败给出重登录状�
  failed.parts.channels={state:'needs_login'};assert.equal(finish(failed).state,'needs_login');
  failed.parts.channels={state:'ok'};assert.equal(finish(failed).state,'partial');
 });
+
+test('小米定时上架属于待发布，新版不能冒充当前线上版本',()=>{
+ const d={packageName:'com.jryx.isho',appId:'123',onlineVersionSelling:true,onlineVersion:{appDetailsInfo:{summary:'已上架',versionName:'3.2',versionCode:312}},releaseNewVersion:{appDetailsInfo:{summary:'审核通过，定时上架',versionName:'3.3',versionCode:313}}};
+ const v=xiaomiChannel(d,'123');assert.equal(v.status,'approved');assert.equal(v.live_version,'3.2');assert.equal(v.live_code,312);assert.equal(v.pending_version,'3.3');assert.equal(v.pending_code,313);assert.equal(v.reason,'审核通过，定时上架');
+ assert.throws(()=>xiaomiChannel({...d,releaseNewVersion:{appDetailsInfo:{...d.releaseNewVersion.appDetailsInfo,summary:'fixture-unknown'}}},'123'),/unknown_status/);
+});

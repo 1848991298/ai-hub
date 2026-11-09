@@ -4,9 +4,9 @@ export function channel(d,expectedId){
  if(d.packageName!==PACKAGE||String(d.appId)!==String(expectedId))throw new Error('app_mismatch');
  const online=d.onlineVersion?.appDetailsInfo,update=d.releaseNewVersion?.appDetailsInfo;
  const live=online?.summary==='已上架'&&d.onlineVersionSelling===true;
- const labels={'未发布':'not_submitted','审核中':'reviewing','审核未通过':'rejected','审核不通过':'rejected','待发布':'approved','已上架':'live','已下架':'offline'};
+ const labels={'未发布':'not_submitted','审核中':'reviewing','审核未通过':'rejected','审核不通过':'rejected','待发布':'approved','审核通过，定时上架':'approved','已上架':'live','已下架':'offline'};
  const status=update?labels[update.summary]:live?'live':'offline';if(!status)throw new Error('unknown_status');
- return {channel:'xiaomi',live_version:live?version(online.versionName):'',live_code:live?count(online.versionCode):null,pending_version:update?version(update.versionName):'',pending_code:update?.versionCode?count(update.versionCode):null,status,as_of:today(),reason:''};
+ return {channel:'xiaomi',live_version:live?version(online.versionName):'',live_code:live?count(online.versionCode):null,pending_version:update?version(update.versionName):'',pending_code:update?.versionCode?count(update.versionCode):null,status,as_of:today(),reason:update?.summary==='审核通过，定时上架'?update.summary:''};
 }
 // 只复用已通过包名校验的官方控制台请求中的两项同源认证参数；不持久化或输出。
 export async function query(page,auth,path,params={},report=false){
@@ -38,8 +38,11 @@ export async function collect({page,context}){
   await page.goto('https://dev.mi.com/xiaomihyperos/console/app-manage/mobile',{waitUntil:'domcontentloaded',timeout:30000});await wait(()=>apps);
   const matches=apps.filter(a=>a.packageName===PACKAGE);if(matches.length!==1)throw Error('app_not_found');const app=matches[0];if(typeof app.appId!=='string')throw Error('app_id_precision');
   const row=page.locator('tr').filter({hasText:PACKAGE}).first();await row.getByText(/^ISHO/).filter({visible:true}).first().click({timeout:15000});await wait(()=>detail);
-  out.rows.channels=[channel(detail,app.appId)];out.parts.channels={state:'ok'};
+  // 身份不一致仍停止整批；状态或版本格式变化只影响该分项。
+  if(detail.packageName!==PACKAGE||String(detail.appId)!==app.appId)throw Error('app_mismatch');
   const namespace=String(app.namespaceValue);if(!/^\d+$/.test(namespace)||!/^\d+$/.test(app.appId))throw Error('app_schema');
+  try{out.rows.channels=[channel(detail,app.appId)];out.parts.channels={state:'ok'};}
+  catch(e){out.parts.channels={...fail(e),code:e.message==='unknown_status'?'unknown_status':'channel_schema'};}
   try{
    if(!auth)throw Error('needs_login');const {from,to}=range();
    const raw=await query(page,auth,`/datacenter/appview/${app.appId}/${namespace}`,{},true);
@@ -54,7 +57,7 @@ export async function collect({page,context}){
     if(!Array.isArray(d.commentInfoList)||count(d.offset)!==offset)throw Error('review_schema');const total=count(d.count);if(expected===undefined)expected=total;if(expected!==total)throw Error('changed_page');
     rows.push(...d.commentInfoList.map(v=>xiaomiReview(v.main)));unique(rows);if(rows.length===expected)break;if(!d.commentInfoList.length||rows.length>expected||offset===1992)throw Error('incomplete_page');
    }
-   out.rows.reviews=rows;Object.assign(out.rows.channels[0],{rating,rating_count:ratingCount});out.parts.reviews={state:'ok',count:rows.length};
+   out.rows.reviews=rows;if(out.rows.channels[0])Object.assign(out.rows.channels[0],{rating,rating_count:ratingCount});out.parts.reviews={state:'ok',count:rows.length};
   }catch(e){out.rows.reviews=[];out.parts.reviews=fail(e);}
   return finish(out);
  }finally{context.off('response',observer);}
