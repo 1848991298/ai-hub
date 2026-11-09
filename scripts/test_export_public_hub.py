@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -12,13 +14,18 @@ class PublicExportTests(unittest.TestCase):
             files=[p for p in root.rglob('*') if p.is_file()]
             self.assertEqual(count,len(files))
             self.assertEqual({p.relative_to(root/'skills').as_posix() for p in (root/'skills').rglob('*') if p.is_file()},
-                             {'README.md','commit-by-business/SKILL.md'})
+                             {'README.md','commit-by-business/SKILL.md',
+                              'git-worktree-audit/SKILL.md','git-worktree-audit/agents/openai.yaml',
+                              'git-worktree-audit/scripts/audit.py','git-worktree-audit/scripts/test_audit.py'})
             self.assertEqual((root/'skills/commit-by-business/SKILL.md').read_bytes(),
                              (public.ROOT/'distribution/public/skills/commit-by-business/SKILL.md').read_bytes())
+            for name in ('SKILL.md','agents/openai.yaml','scripts/audit.py','scripts/test_audit.py'):
+                rel='skills/git-worktree-audit/'+name
+                self.assertEqual((root/rel).read_bytes(),(public.ROOT/'distribution/public'/rel).read_bytes())
             self.assertFalse((root/'rules/clients').exists())
             self.assertFalse((root/'.local').exists())
             self.assertEqual([line.split('\t')[1] for line in (root/'manifest.tsv').read_text().splitlines() if line.startswith('canonical\t')],
-                             ['commit-by-business'])
+                             ['commit-by-business','git-worktree-audit'])
             self.assertEqual([p['id'] for p in json.loads((root/'ui/projects.json').read_text())],['hub'])
             self.assertTrue((root/'desktop/macos/main.swift').is_file())
             self.assertTrue((root/'scripts/tracker_hub.py').is_file())
@@ -41,6 +48,30 @@ class PublicExportTests(unittest.TestCase):
             root=Path(temp);(root/'keep').write_text('keep')
             with self.assertRaises(ValueError):public.export(root)
             self.assertEqual((root/'keep').read_text(),'keep')
+
+    def test_exported_auditor_runs_without_maintenance_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)/'public';public.export(root)
+            result=subprocess.run([sys.executable,str(root/'skills/git-worktree-audit/scripts/test_audit.py')],
+                                  cwd=root,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_missing_worktree_audit_files_never_fall_back_to_personal_source(self):
+        names=('SKILL.md','agents/openai.yaml','scripts/audit.py','scripts/test_audit.py')
+        for missing in names:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temp:
+                source=Path(temp)/'source'
+                for rel in public.PUBLIC_SKILLS:
+                    path=source/'distribution/public'/rel
+                    if rel=='skills/git-worktree-audit/'+missing:continue
+                    path.parent.mkdir(parents=True,exist_ok=True);path.write_text('generic fixture')
+                private=source/'skills/git-worktree-audit'/missing
+                private.parent.mkdir(parents=True,exist_ok=True);private.write_text('private fixture must not be exported')
+                target=Path(temp)/'public'
+                with patch.object(public,'ROOT',source),patch.object(public,'TOP',()), \
+                     patch.object(public,'SCREENSHOTS',()),patch.object(public,'TEMPLATES',()):
+                    with self.assertRaisesRegex(ValueError,'来源缺失'):public.export(target)
+                self.assertFalse(target.exists())
 
     def test_missing_generic_skill_never_falls_back_to_personal_skill(self):
         with tempfile.TemporaryDirectory() as temp:

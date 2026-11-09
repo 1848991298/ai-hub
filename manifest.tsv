@@ -2,3 +2,4 @@
 # 公开版仅预装已审核的通用技能，不包含作者个人技能配置。新增时登记：
 # canonical<TAB>技能名称<TAB>来源说明
 canonical	commit-by-business	generic-public
+canonical	git-worktree-audit	generic-public

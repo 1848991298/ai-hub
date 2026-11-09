@@ -16,7 +16,11 @@ TEMPLATES = ('README.md', 'RULE.md', 'inventory.md', 'manifest.tsv', 'setup.comm
              'tracker-config.example.json', 'rules/global.md', 'rules/cursor-bootstrap.md',
              'rules/agents-bootstrap.md', 'skills/README.md', 'ui/projects.json',
              'docs/portability.md', 'docs/market-operations.md')
-PUBLIC_SKILLS = ('skills/commit-by-business/SKILL.md',)
+PUBLIC_SKILLS = ('skills/commit-by-business/SKILL.md',
+                 'skills/git-worktree-audit/SKILL.md',
+                 'skills/git-worktree-audit/agents/openai.yaml',
+                 'skills/git-worktree-audit/scripts/audit.py',
+                 'skills/git-worktree-audit/scripts/test_audit.py')
 TOP = ('.gitignore', '.dockerignore', 'ui/index.html', 'ui/market.html', 'ui/package.json',
        'ui/package-lock.json', 'ui/vite.config.js', 'scripts/pull.sh', 'scripts/cursor_rules.applescript',
        'scripts/usage-tools/package.json', 'scripts/usage-tools/package-lock.json')

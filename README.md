@@ -100,7 +100,10 @@ AI Hub 是在自己 Mac 上运行的工作台。你可以把 Cursor / Codex 的�
 
 ### 3. 查看和补充自己的 Skills
 
-打开 **Skills** 可以搜索登记的技能、阅读说明与正文、查看映射到哪些客户端。公开版预装一个通用的 [按业务分批提交技能](skills/commit-by-business/SKILL.md)，不含作者个人规则和项目配置。完成映射后可使用 `$commit-by-business`：先整理文件、批次和完整提交说明，再根据授权执行；多平台项目会核对共享与独立调用链，并分别说明验证情况。
+打开 **Skills** 可以搜索登记的技能、阅读说明与正文、查看映射到哪些客户端。公开版预装两项通用技能，不含作者个人规则和项目配置：
+
+- [分支与工作区盘点](skills/git-worktree-audit/SKILL.md)：映射后调用 `$git-worktree-audit`，只读检查当前仓库的分支、全部 worktree、未提交文件、stash 和 Shelf，再按实际差异给出处理建议；默认不联网、不提交、不清理。
+- [按业务分批提交](skills/commit-by-business/SKILL.md)：映射后调用 `$commit-by-business`，整理完整文件、批次和提交说明，再根据授权执行；多平台项目核对共享与独立调用链，并分别说明验证情况。
 
 添加自己的技能时：
 
