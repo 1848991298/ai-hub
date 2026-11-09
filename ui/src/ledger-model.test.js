@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
+import { columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
 
 const rows = [
   { id: 'a', content: '过期未结束', status: '未启动', priority: 'P1', due: '2026-10-01', created_at: '2026-10-01 09:00', note: '' },
@@ -119,4 +119,17 @@ test('未配置标签字段的六列布局按可见列适配，不丢失隐藏�
   assert.equal(Object.hasOwn(fitted,'tags'),false);
   assert.ok(Math.abs(Object.values(fitted).reduce((a,b)=>a+b,0)-1100)<4);
   assert.ok(columnWidths({...columnWidths(),...fitted}).tags>=44);
+});
+
+test('自适应优先扩大正文列，窄窗口保留可读宽度并允许横向滚动', () => {
+  const result=fillColumnWidths(1800);
+  assert.equal(Object.values(result).reduce((a,b)=>a+b,0),1800);
+  assert.equal(result.status,ledgerColumnDefaults.status);
+  assert.equal(result.due,ledgerColumnDefaults.due);
+  assert.ok(result.content>ledgerColumnDefaults.content);
+  assert.ok(result.note>ledgerColumnDefaults.note);
+  assert.deepEqual(fillColumnWidths(500),ledgerColumnDefaults);
+  const withoutNote=fillColumnWidths(1500,ledgerColumnOrder.filter(k=>k!=='note'));
+  assert.equal(Object.values(withoutNote).reduce((a,b)=>a+b,0),1500);
+  assert.ok(!Object.hasOwn(withoutNote,'note'));
 });

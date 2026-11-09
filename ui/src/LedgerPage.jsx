@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ClipboardList, Columns3, GripVertical, Plus, RefreshCw, Save, X } from 'lucide-react';
-import { blankForm, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, filterRecords, fitColumnWidths, isOverdue, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities } from './ledger-model.js';
+import { blankForm, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, filterRecords, isOverdue, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
 import './ledger.css';
 
@@ -76,7 +76,7 @@ function ColumnLayout({ columns, widths, onWidth, onFit, onMove, onReset }) {
         <button type="button" aria-label={`将${columnLabels[key]}左移`} disabled={index === 0} onClick={() => onMove(key, columns[index - 1], false)}><ArrowUp size={15}/></button>
         <button type="button" aria-label={`将${columnLabels[key]}右移`} disabled={index === columns.length - 1} onClick={() => onMove(key, columns[index + 1], true)}><ArrowDown size={15}/></button>
       </li>)}</ol>
-      <button type="button" className="button" onClick={onFit}>适应当前窗口</button><p>拖动列边缘或输入像素精调。手动宽度独立保存；双击边缘恢复该列。</p>
+      <button type="button" className="button" onClick={onFit}>适应当前窗口</button><p>自适应优先把空间分给内容和备注；拖动或输入像素后切换手动模式。两种模式可随时切换。</p>
     </div>
   </details>;
 }
@@ -106,6 +106,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const [sort, setSort] = useState({ key: 'due', dir: 'asc' });
   const [widths, setWidths] = useState(() => columnWidths(savedValue('ai-hub-ledger-columns')));
   const [columnOrder, setColumns] = useState(() => columnSequence(savedValue('ai-hub-ledger-column-order')));
+  const [widthMode, setWidthMode] = useState(() => savedValue('ai-hub-ledger-width-mode') === 'manual' ? 'manual' : 'fill');
   const [tableViewport, setTableViewport] = useState(0);
   const [columnTarget, setColumnTarget] = useState(null);
   const [rowTarget, setRowTarget] = useState(null);
@@ -128,6 +129,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   }
 
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-columns', JSON.stringify(widths)); } catch { /* 本窗口仍可使用当前列宽。 */ } }, [widths]);
+  useEffect(() => { try { localStorage.setItem('ai-hub-ledger-width-mode', JSON.stringify(widthMode)); } catch {} }, [widthMode]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-column-order', JSON.stringify(columnOrder)); } catch { /* 本窗口仍可使用当前列序。 */ } }, [columnOrder]);
   useEffect(() => {
     const scroll = tableScroll.current;
@@ -237,6 +239,11 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   function resetColumns() {
     setColumns(ledgerColumnOrder);
     setWidths(columnWidths());
+    setWidthMode('fill');
+  }
+  function resizeColumn(key, value) {
+    setWidths(columnWidths({ ...widths, ...fittedWidths, [key]: value }));
+    setWidthMode('manual');
   }
   function columnDrop(event, key) {
     if (!columnDrag.current || columnDrag.current === key) return null;
@@ -323,7 +330,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const sorted = manualOrder ? orderedRows(rows, manualIds, sinkDone) : sortRecords(rows, sort, sinkDone);
   const scopedRows = recordId ? sorted.filter(row => row.id === recordId) : sorted;
   const visible = filterRecords(scopedRows, filters, day);
-  const fittedWidths = widths;
+  const fittedWidths = widthMode === 'fill' ? fillColumnWidths(Math.max(0, tableViewport - rowIndexWidth), columns) : widths;
   const tableWidth = columns.reduce((sum, key) => sum + fittedWidths[key], rowIndexWidth);
   const counts = {
     status: Object.fromEntries(statuses.map(item => [item, rows.filter(row => row.status === item).length])),
@@ -419,7 +426,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         <span className="ledger-result-count" aria-live="polite">{data ? <>显示 <strong>{visible.length}</strong> / {rows.length} 条</> : '读取中…'}</span>
         {view === 'board' ? <span className="ledger-caption">拖到另一列可改状态</span> : <>
           {allowReorder && manualIds.length > 0 && <button type="button" className="ledger-layout-button" aria-pressed={manualOrder} onClick={() => saveOrder(manualIds, !manualOrder)}>手动行序</button>}
-          <ColumnLayout widths={widths} onWidth={(key,value) => setWidths(current => columnWidths({...current,[key]:value}))} onFit={() => setWidths(current => ({...current,...fitColumnWidths(current, Math.max(0, tableViewport - rowIndexWidth), columns)}))} columns={columns} onMove={moveColumn} onReset={resetColumns}/>
+          <div className="ledger-tabs ledger-width-mode" role="group" aria-label="表格宽度模式"><button type="button" aria-pressed={widthMode === 'fill'} className={widthMode === 'fill' ? 'selected' : ''} onClick={() => setWidthMode('fill')}>适应窗口</button><button type="button" aria-pressed={widthMode === 'manual'} className={widthMode === 'manual' ? 'selected' : ''} onClick={() => setWidthMode('manual')}>手动列宽</button></div>
+          <ColumnLayout widths={fittedWidths} onWidth={resizeColumn} onFit={() => setWidthMode('fill')} columns={columns} onMove={moveColumn} onReset={resetColumns}/>
         </>}
       </div>
     </div>
@@ -455,7 +463,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
                 onDragEnd={() => { columnDrag.current = null; setColumnTarget(null); }}><GripVertical size={13}/></span>
               {sortableColumns.includes(key) ? <SortHeader column={key} label={columnLabels[key]} sort={manualOrder ? null : sort} onSort={sortByColumn} /> : <span>{columnLabels[key]}</span>}
             </div>
-            <ColumnResize label={columnLabels[key]} value={widths[key]} minimum={ledgerColumnLimits[key][0]} maximum={ledgerColumnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => setWidths(current => columnWidths({ ...current, [key]: value }))} />
+            <ColumnResize label={columnLabels[key]} value={fittedWidths[key]} minimum={ledgerColumnLimits[key][0]} maximum={ledgerColumnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => resizeColumn(key, value)} />
           </th>)}
         </tr></thead>
         <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={() => openEdit(row)}

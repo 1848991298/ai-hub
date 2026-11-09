@@ -165,3 +165,21 @@ export function fitColumnWidths(widths, available, keys = ledgerColumnOrder) {
     return [key, Math.round(Math.min(max, min + (widths[key] - min) * scale))];
   }));
 }
+
+// 自适应布局保留可读基宽，余量优先给内容和备注；不改写手动偏好。
+export function fillColumnWidths(available, keys = ledgerColumnOrder) {
+  const result = Object.fromEntries(keys.map(key => [key, ledgerColumnDefaults[key]]));
+  let extra = Math.max(0, Math.floor(available) - Object.values(result).reduce((a,b) => a+b,0));
+  const flexible = ['content','note'].filter(key => keys.includes(key));
+  const initial = extra;
+  for (const key of flexible) {
+    const target = flexible.length === 1 ? initial : Math.floor(initial * (key === 'content' ? .7 : .3));
+    const add = Math.min(extra, target, ledgerColumnLimits[key][1] - result[key]);
+    result[key] += add; extra -= add;
+  }
+  for (const key of [...flexible, ...keys.filter(key => !flexible.includes(key))]) {
+    const add = Math.min(extra, ledgerColumnLimits[key][1] - result[key]);
+    result[key] += add; extra -= add;
+  }
+  return result;
+}
