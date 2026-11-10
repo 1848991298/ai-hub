@@ -1,5 +1,7 @@
 export const statuses = ['未启动', '开发中', '测试中', '已完成'];
 export const priorities = ['P0', 'P1', 'P2'];
+export const taskCategories = ['需求', '优化'];
+export const categoryOf = row => row.kind === 'issue' ? '问题' : row.category || '未分类';
 export const canonicalStatus = status => ({ '进行中': '开发中', '已结束': '已完成' }[status] || status);
 export const isDone = row => canonicalStatus(row.status) === '已完成';
 
@@ -23,7 +25,7 @@ export function moveItem(ids, from, to, after = false) {
 }
 
 export function emptyFilters() {
-  return { status: {}, priority: {}, tags: {}, overdue: null };
+  return { status: {}, priority: {}, category: {}, tags: {}, overdue: null };
 }
 
 export function cycleMode(mode) {
@@ -45,11 +47,11 @@ export function isOverdue(row, today) {
 }
 
 function tagMatches(tags, map) {
-  const selected = tags || [];
+  const selected = (tags || []).map(tagKey);
   const includes = Object.keys(map).filter(key => map[key] === 'include');
   const excludes = Object.keys(map).filter(key => map[key] === 'exclude');
-  if (excludes.some(tag => selected.includes(tag))) return false;
-  if (includes.length && !includes.every(tag => selected.includes(tag))) return false;
+  if (excludes.some(tag => selected.includes(tagKey(tag)))) return false;
+  if (includes.length && !includes.every(tag => selected.includes(tagKey(tag)))) return false;
   return true;
 }
 
@@ -65,6 +67,7 @@ export function filterRecords(rows, filters, today) {
   return rows.filter(row => {
     if (!facetMatches(row.status, filters.status || {})) return false;
     if (!facetMatches(row.priority || '', filters.priority || {})) return false;
+    if (!facetMatches(categoryOf(row), filters.category || {})) return false;
     if (!tagMatches(row.tags, filters.tags || {})) return false;
     const overdue = isOverdue(row, today);
     if (filters.overdue === 'include' && !overdue) return false;
@@ -100,6 +103,7 @@ export function sortRecords(rows, sort, sinkDone = true) {
     let difference = 0;
     if (key === 'created') difference = compareDate(a.created_at, b.created_at, dir);
     else if (key === 'priority') difference = compareKnown(priorityRank, a.priority, b.priority, dir);
+    else if (key === 'category') difference = compareKnown({ '需求': 0, '优化': 1, '问题': 2 }, categoryOf(a), categoryOf(b), dir);
     else if (key === 'status') difference = compareKnown(statusRank, canonicalStatus(a.status), canonicalStatus(b.status), dir);
     else difference = compareDate(a.due, b.due, dir);
     if (difference) return difference;
@@ -115,7 +119,7 @@ export function nextSort(current, key) {
 
 export function changedFields(base, values) {
   const patch = {};
-  for (const key of ['content', 'status', 'due', 'priority', 'note']) {
+  for (const key of ['content', 'status', 'due', 'priority', 'note', 'category']) {
     if ((base[key] || '') !== (values[key] || '')) patch[key] = values[key] || null;
   }
   if ((base.tags || []).join('\n') !== (values.tags || []).join('\n')) patch.tags = values.tags || [];
@@ -124,7 +128,19 @@ export function changedFields(base, values) {
 }
 
 export function blankForm() {
-  return { content: '', status: '未启动', due: '', priority: '', note: '', tags: [], archived: false };
+  return { content: '', status: '未启动', due: '', priority: '', note: '', tags: [], archived: false, category: '' };
+}
+
+export const tagKey = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
+export const hasTag = (tags, name) => (tags || []).some(tag => tagKey(tag) === tagKey(name));
+
+export function mergeTags(values, known = []) {
+  const canonical = new Map();
+  for (const name of [...known, ...values]) {
+    const key = tagKey(name);
+    if (key && !canonical.has(key)) canonical.set(key, name.trim());
+  }
+  return [...new Set(values.map(tagKey).filter(Boolean))].map(key => canonical.get(key));
 }
 
 export function knownTags(data) {
@@ -132,19 +148,20 @@ export function knownTags(data) {
   const sources = [data?.tag_options, ...(data?.issues || []).map(row => row?.tags), ...(data?.tasks || []).map(row => row?.tags)];
   for (const list of sources) {
     for (const name of list || []) {
-      if (typeof name !== 'string' || !name.trim() || found.includes(name)) continue;
+      if (typeof name !== 'string' || !name.trim()) continue;
       found.push(name);
     }
   }
-  return found;
+  return mergeTags(found);
 }
 
-export const ledgerColumnDefaults = { content: 300, status: 100, due: 148, priority: 94, tags: 148, created: 134, note: 192 };
-export const ledgerColumnLimits = { content: [64, 1600], tags: [44, 800], status: [44, 400], created: [48, 600], due: [48, 600], priority: [44, 400], note: [48, 1600] };
+export const ledgerColumnDefaults = { content: 300, category: 100, status: 100, due: 148, priority: 94, tags: 148, created: 134, note: 192 };
+export const ledgerColumnLimits = { content: [64, 1600], category: [48, 400], tags: [44, 800], status: [44, 400], created: [48, 600], due: [48, 600], priority: [44, 400], note: [48, 1600] };
 export const ledgerColumnOrder = Object.keys(ledgerColumnDefaults);
 
 export function columnSequence(saved) {
   const valid = Array.isArray(saved) ? saved.filter(key => ledgerColumnOrder.includes(key)) : [];
+  if (valid.includes('content') && !valid.includes('category')) valid.splice(valid.indexOf('content') + 1, 0, 'category');
   return [...new Set([...valid, ...ledgerColumnOrder])];
 }
 

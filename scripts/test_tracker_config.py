@@ -43,6 +43,13 @@ class TrackerConfigTests(unittest.TestCase):
             value['tables']['task']['fields']['archived']=value['tables']['task']['fields']['status'];path.write_text(json.dumps(value))
             self.assertFalse(load_settings(root)[0])
 
+    def test_category_binding_is_optional_and_task_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);path=root/'.local/tracker-config.json';path.parent.mkdir()
+            value={'base_token':'ExampleBase','base_url':'https://example.feishu.cn/base/ExampleBase','tables':{kind:{'id':'tbl'+kind,'fields':{field:'fld'+kind+field for field in ('content','status','created','due','priority','note','tags')}} for kind in ('issue','task')}}
+            value['tables']['task']['fields']['category']='fldTaskCategory';path.write_text(json.dumps(value));self.assertIsNone(load_settings(root)[3])
+            value['tables']['issue']['fields']['category']='fldIssueCategory';path.write_text(json.dumps(value));self.assertFalse(load_settings(root)[0])
+
     def test_credentials_and_duplicate_field_ids_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);path=root/'.local/tracker-config.json';path.parent.mkdir()

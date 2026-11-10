@@ -185,6 +185,41 @@ class OutboxTests(unittest.TestCase):
                 self.service.enqueue({'operations': [op(), op(change=bad)]})
             self.assertEqual(self.service.snapshot()['sync']['pending'], 0)
 
+    def test_task_category_default_bulk_conflict_and_legacy_edit(self):
+        fields = {**TABLES['task']['fields'], 'category': 'fldFixtureCategory'}
+        with patch.dict(TABLES['task'], {'fields': fields}):
+            create = {'operation': 'create', 'kind': 'task', 'client_operation_id': str(uuid.uuid4()), 'content': '新需求'}
+            self.service.enqueue(create)
+            job = self.service.outbox.jobs()[0]
+            self.assertEqual(job['payload']['body']['category'], '需求')
+            self.service.process_next()
+            row = self.client.rows['task'][0]
+            self.assertEqual(row['category'], '需求')
+            self.service.update({'kind':'task','record_id':row['id'],'base':dict(row),'patch':{'category':'优化'}})
+            self.assertEqual(self.client.updates[-1][2], {'类型':'优化'})
+            legacy = dict(sample('recLegacy'), kind='task', category=None)
+            self.client.rows['task'].append(legacy)
+            self.service.update({'kind':'task','record_id':legacy['id'],'base':dict(legacy),'patch':{'note':'保留未分类'}})
+            self.assertIsNone(legacy['category'])
+            self.assertEqual(self.client.updates[-1][2], {'备注':'保留未分类'})
+            base = dict(row)
+            row['category'] = '需求'
+            with self.assertRaises(TrackerError) as caught:
+                self.service.update({'kind':'task','record_id':row['id'],'base':base,'patch':{'category':'优化','note':'本次说明'}})
+            self.assertEqual(caught.exception.status, 409)
+
+    def test_category_requires_task_binding_and_one_of_two_choices(self):
+        fields = {**TABLES['task']['fields'], 'category': 'fldFixtureCategory'}
+        with patch.dict(TABLES['task'], {'fields': fields}):
+            for value in ('修复', '', None):
+                with self.assertRaises(TrackerError):
+                    self.service._clean_patch('task', {'category':value})
+            with self.assertRaises(TrackerError):
+                self.service._clean_patch('issue', {'category':'需求'})
+        with patch.dict(TABLES['task'], {'fields': {key:value for key,value in fields.items() if key != 'category'}}):
+            with self.assertRaises(TrackerError):
+                self.service._clean_patch('task', {'category':'需求'})
+
     def test_generic_error_never_exposes_exception_secrets(self):
         self.service.enqueue(op())
         with patch.object(self.client, 'update', side_effect=RuntimeError('fixture-private-secret')):

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ClipboardList, Columns3, GripVertical, Plus, RefreshCw, Save, X } from 'lucide-react';
-import { blankForm, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Plus, RefreshCw, Save, X } from 'lucide-react';
+import { blankForm, categoryOf, taskCategories, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
 import './ledger.css';
 
@@ -21,7 +21,7 @@ async function api(action, body) {
 }
 
 function valuesOf(row) {
-  return { content: row.content || '', status: canonicalStatus(row.status) || '未启动', due: row.due || '', priority: row.priority || '', note: row.note || '', tags: row.tags || [], archived: Boolean(row.archived) };
+  return { content: row.content || '', status: canonicalStatus(row.status) || '未启动', due: row.due || '', priority: row.priority || '', note: row.note || '', tags: row.tags || [], archived: Boolean(row.archived), category: row.category || '' };
 }
 
 const statusTone = { '未启动': 'is-idle', '开发中': 'is-run', '测试中': 'is-test', '已完成': 'is-done' };
@@ -57,8 +57,8 @@ function ColumnResize({ label, value, minimum, maximum, fallback, onChange }) {
     onPointerCancel={finish} onLostPointerCapture={finish} />;
 }
 
-const columnLabels = { content: '内容', status: '状态', due: '截止时间', priority: '优先级', tags: '标签', created: '创建时间', note: '备注' };
-const sortableColumns = ['status', 'created', 'due', 'priority'];
+const columnLabels = { content: '内容', category: '类型', status: '状态', due: '截止时间', priority: '优先级', tags: '标签', created: '创建时间', note: '备注' };
+const sortableColumns = ['status', 'created', 'due', 'priority', 'category'];
 const rowIndexWidth = 84;
 
 function savedValue(key) {
@@ -198,11 +198,13 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     if (recordId || route.overdue) navigate?.({ kind });
   }
   function openCreate(target = kind) {
-    setEditor({ mode: 'create', kind: target, requestId: requestId(), base: blankForm(), form: blankForm() });
+    setTagDraft('');
+    setEditor({ mode: 'create', kind: target, requestId: requestId(), base: blankForm(), form: { ...blankForm(), category: target === 'task' && data?.category_fields?.task ? '需求' : '' } });
     setMessage('');
     setError('');
   }
   function openEdit(row) {
+    setTagDraft('');
     if (!row.id.startsWith('rec')) { setMessage('这条新记录正在同步，完成后可继续编辑。'); return; }
     const form = valuesOf(row);
     setEditor({ mode: 'edit', kind: row.kind || kind, recordId: row.id, requestId: requestId(), base: form, form });
@@ -212,19 +214,22 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   function change(key, value) {
     setEditor(current => ({ ...current, form: { ...current.form, [key]: value } }));
   }
+  function editorValues() {
+    return tagDraft.trim() ? { ...editor.form, tags: mergeTags([...editor.form.tags, tagDraft], knownTags(data)) } : editor.form;
+  }
   async function save(event) {
     event.preventDefault();
     if (!editor || saving) return;
-    const form = editor.form;
+    const form = editorValues();
     const patch = editor.mode === 'edit' ? changedFields(editor.base, form) : null;
     if (patch && !Object.keys(patch).length) { setEditor(null); return; }
     setSaving(true); setError('');
     try {
       const operation = editor.mode === 'create'
-        ? { operation: 'create', kind: editor.kind, client_operation_id: editor.requestId, content: form.content, status: form.status, due: form.due || null, priority: form.priority || null, note: form.note, tags: form.tags }
+        ? { operation: 'create', kind: editor.kind, client_operation_id: editor.requestId, content: form.content, status: form.status, due: form.due || null, priority: form.priority || null, note: form.note, tags: form.tags, ...(editor.kind === 'task' && data?.category_fields?.task ? { category: form.category } : {}) }
         : { operation: 'update', kind: editor.kind, client_operation_id: editor.requestId, record_id: editor.recordId, base: editor.base, patch };
       const result = await api('enqueue', { ...operation, ...(editor.supersedes ? { supersedes: editor.supersedes, confirmed_not_created: editor.confirmed } : {}) });
-      acceptSnapshot(result.snapshot); setEditor(null); setMessage('');
+      acceptSnapshot(result.snapshot); setEditor(null); setTagDraft(''); setMessage('');
     } catch (reason) { setError(reason.message + ' 修改仍保留在表单中。'); }
     finally { setSaving(false); }
   }
@@ -245,6 +250,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     catch (reason) { setError(reason.message); }
   }
   function editFailed(job) {
+    setTagDraft('');
     const base = valuesOf(job.cloud_record || {});
     setEditor({ mode: job.operation === 'create' ? 'create' : 'edit', kind: job.kind, recordId: job.record_id,
       requestId: requestId(), base, form: valuesOf({ ...base, ...(job.operation === 'update' ? job.patch : job.draft) }), supersedes: job.id,
@@ -262,7 +268,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   }
   function toggleTag(name) {
     setEditor(current => {
-      const tags = current.form.tags.includes(name) ? current.form.tags.filter(item => item !== name) : [...current.form.tags, name];
+      const tags = hasTag(current.form.tags, name) ? current.form.tags.filter(item => tagKey(item) !== tagKey(name)) : mergeTags([...current.form.tags, name], knownTags(data));
       return { ...current, form: { ...current.form, tags } };
     });
   }
@@ -330,15 +336,15 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     tagCommit.current = true;
     const name = (explicitName == null ? rowTag : explicitName).trim();
     setTaggingId(null); setRowTag('');
-    if (!name || (row.tags || []).includes(name)) return;
-    await submitPatches([row], { tags: [...(row.tags || []), name] });
+    if (!name || hasTag(row.tags, name)) return;
+    await submitPatches([row], { tags: mergeTags([...(row.tags || []), name], knownTags(data)) });
   }
   function addTag(event) {
     event.preventDefault();
     const name = tagDraft.trim();
     if (!name) return;
     setTagDraft('');
-    setEditor(current => current.form.tags.includes(name) ? current : { ...current, form: { ...current.form, tags: [...current.form.tags, name] } });
+    setEditor(current => ({ ...current, form: { ...current.form, tags: mergeTags([...current.form.tags, name], knownTags(data)) } }));
   }
   function setFacet(group, value) {
     setFilters(current => ({ ...current, [group]: cycleFacet(current[group], value) }));
@@ -357,7 +363,9 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const rows = kind === 'all' ? [...issues, ...tasks] : kind === 'issue' ? issues : tasks;
   const supportsTags = rowKind => data?.tag_fields?.[rowKind] !== false;
   const showTagColumn = kind === 'all' ? supportsTags('issue') || supportsTags('task') : supportsTags(kind);
-  const columns = columnOrder.filter(key => !hiddenColumns.includes(key) && (key !== 'tags' || showTagColumn));
+  const supportsCategory = Boolean(data?.category_fields?.task);
+  const showCategoryColumn = supportsCategory && kind !== 'issue';
+  const columns = columnOrder.filter(key => !hiddenColumns.includes(key) && (key !== 'category' || showCategoryColumn) && (key !== 'tags' || showTagColumn));
   const allowReorder = kind !== 'all' && !recordId;
   const savedOrder = order[kind];
   const manualIds = Array.isArray(savedOrder) ? savedOrder : Array.isArray(savedOrder?.ids) ? savedOrder.ids : [];
@@ -393,6 +401,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   };
   const chips = [
     ...Object.entries(filters.status).map(([value, mode]) => ({ key: `status-${value}`, label: `${mode === 'exclude' ? '排除' : '只看'} ${value}`, clear: () => clearFacet('status', value) })),
+    ...Object.entries(filters.category || {}).map(([value, mode]) => ({ key: `category-${value}`, label: `${mode === 'exclude' ? '排除' : '只看'} ${value}`, clear: () => clearFacet('category', value) })),
     ...Object.entries(filters.priority).map(([value, mode]) => ({ key: `priority-${value}`, label: `${mode === 'exclude' ? '排除' : '只看'} ${value}`, clear: () => clearFacet('priority', value) })),
     ...Object.entries(filters.tags || {}).map(([value, mode]) => ({ key: `tag-${value}`, label: `${mode === 'exclude' ? '排除' : '含'} ${value}`, clear: () => clearFacet('tags', value) })),
     ...(filters.overdue ? [{ key: 'overdue', label: filters.overdue === 'exclude' ? '排除已过截止' : '只看已过截止', clear: () => changeOverdue(null) }] : []),
@@ -403,16 +412,16 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   function contextButton(row) {
     return <button type="button" className="ledger-context-trigger" title="查看执行资料" aria-label={'执行资料 · ' + row.content} onClick={event => { event.stopPropagation(); setContextRow(row); }}><ClipboardList size={15}/></button>;
   }
-  const tagOptions = showTagColumn ? [...new Set([...(data?.tag_options || []), ...rows.flatMap(row => row.tags || []), ...(editor?.form.tags || [])])] : [];
+  const tagOptions = showTagColumn ? mergeTags([...knownTags(data), ...(editor?.form.tags || [])]) : [];
   const reusableTags = knownTags(data);
   const floatRow = floatBox?.rowId ? rows.find(item => item.id === floatBox.rowId) : null;
   const floatTags = floatRow?.tags || [];
   function reuseRowTag(name) {
-    if (!floatRow || floatTags.includes(name)) return;
+    if (!floatRow || hasTag(floatTags, name)) return;
     commitRowTag(floatRow, name);
     setFloatBox(null);
   }
-  const tagCounts = Object.fromEntries(tagOptions.map(tag => [tag, rows.filter(row => (row.tags || []).includes(tag)).length]));
+  const tagCounts = Object.fromEntries(tagOptions.map(tag => [tag, rows.filter(row => hasTag(row.tags, tag)).length]));
   function renderCell(key, row) {
     const overdue = isOverdue(row, day);
     const tags = row.tags || [];
@@ -436,6 +445,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
           }}>{tags.length > 1 ? `+${tags.length - 1}` : <Plus size={14}/>}</button>
         </div>
       </td>;
+      case 'category': return <td key={key}><Pill tone={row.kind === 'issue' ? '' : row.category === '优化' ? 'is-category-opt' : row.category ? 'is-category-need' : ''} mode={filters.category?.[categoryOf(row)]} onClick={() => setFacet('category', categoryOf(row))}>{categoryOf(row)}</Pill></td>;
       case 'status': return <td key={key}><Pill tone={statusTone[row.status]} mode={filters.status[row.status]} onClick={() => setFacet('status', row.status)}>{row.status}</Pill></td>;
       case 'created': return <td key={key} className="ledger-time" title={row.created_at || undefined}>{shortClock(row.created_at)}</td>;
       case 'due': return <td key={key} className={overdue ? 'ledger-time ledger-past' : 'ledger-time'} title={overdue ? `${row.due} · 逾期` : undefined}>{row.due || '—'}{overdue && <span className="ledger-overdue-dot" aria-label="逾期" />}</td>;
@@ -473,6 +483,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         {priorities.map(item => <button key={item} type="button" className={`ledger-stat ${filters.priority[item] ? `is-${filters.priority[item]}` : ''}`} aria-pressed={filters.priority[item] ? 'true' : 'false'} onClick={() => setFacet('priority', item)}><strong>{counts.priority[item]}</strong><small>{item}</small></button>)}
         <button type="button" className={`ledger-stat ${filters.overdue ? `is-${filters.overdue}` : ''}`} aria-pressed={filters.overdue ? 'true' : 'false'} onClick={() => changeOverdue(cycleMode(filters.overdue))}><strong>{counts.overdue}</strong><small>已过截止</small></button>
       </div>
+      {showCategoryColumn && <div className="ledger-chips ledger-category-filters" aria-label="类型筛选"><span>类型</span>{[...taskCategories, '未分类', ...(kind === 'all' ? ['问题'] : [])].map(value => <button key={value} type="button" className={`ledger-chip ${filters.category?.[value] ? `is-${filters.category[value]}` : ''}`} aria-pressed={Boolean(filters.category?.[value])} onClick={() => setFacet('category', value)}>{value}<em>{rows.filter(row => categoryOf(row) === value).length}</em></button>)}</div>}
       {!!tagOptions.length && <div className="ledger-chips" aria-label="标签">{tagOptions.map(tag => <button key={tag} type="button" className={`ledger-chip ${(filters.tags || {})[tag] ? `is-${(filters.tags || {})[tag]}` : ''}`} aria-pressed={(filters.tags || {})[tag] ? 'true' : 'false'} onClick={() => setFacet('tags', tag)}>{tag}<em>{tagCounts[tag] || 0}</em></button>)}</div>}
       {(!!chips.length || recordId) && <div className="ledger-chips">{recordId && <button type="button" className="ledger-chip" onClick={() => navigate?.({ kind, overdue: route.overdue })}>搜索定位到的记录<X size={13}/></button>}{chips.map(chip => <button key={chip.key} type="button" className="ledger-chip" onClick={chip.clear}>{chip.label}<X size={13} /></button>)}<button type="button" className="ledger-chip is-clear" onClick={clearFilters}>清除筛选</button></div>}
     </section>
@@ -494,14 +505,15 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         {view === 'board' ? <span className="ledger-caption">拖到另一列可改状态</span> : <>
           {allowReorder && manualIds.length > 0 && <button type="button" className="ledger-layout-button" aria-pressed={manualOrder} onClick={() => saveOrder(manualIds, !manualOrder)}>手动行序</button>}
           <div className="ledger-tabs ledger-width-mode" role="group" aria-label="表格宽度模式"><button type="button" aria-pressed={widthMode === 'fill'} className={widthMode === 'fill' ? 'selected' : ''} onClick={() => setWidthMode('fill')}>适应窗口</button><button type="button" aria-pressed={widthMode === 'manual'} className={widthMode === 'manual' ? 'selected' : ''} onClick={() => setWidthMode('manual')}>手动列宽</button></div>
-          <ColumnLayout widths={{ ...widths, ...fittedWidths }} hidden={hiddenColumns} visibleColumns={columns} onToggle={key => setHiddenColumns(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])} onWidth={resizeColumn} onFit={() => setWidthMode('fill')} columns={columnOrder.filter(key => key !== 'tags' || showTagColumn)} onMove={moveColumn} onReset={resetColumns}/>
+          <ColumnLayout widths={{ ...widths, ...fittedWidths }} hidden={hiddenColumns} visibleColumns={columns} onToggle={key => setHiddenColumns(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])} onWidth={resizeColumn} onFit={() => setWidthMode('fill')} columns={columnOrder.filter(key => (key !== 'category' || showCategoryColumn) && (key !== 'tags' || showTagColumn))} onMove={moveColumn} onReset={resetColumns}/>
         </>}
       </div>
     </div>
     {selectedRows.length > 0 && <div className="ledger-batch-bar" role="group" aria-label="批量操作"><strong>已选 {selectedRows.length} 条</strong>
       <select aria-label="批量修改状态" value="" disabled={saving} onChange={event => submitPatches(selectedRows, { status: event.target.value })}><option value="" disabled>修改状态</option>{statuses.map(status => <option key={status}>{status}</option>)}</select>
+      {supportsCategory && <select aria-label="批量修改类型" title="需求与优化适用于任务记录" value="" disabled={saving || selectedRows.some(row => row.kind !== 'task')} onChange={event => submitPatches(selectedRows, { category: event.target.value })}><option value="" disabled>类型</option>{taskCategories.map(value => <option key={value}>{value}</option>)}</select>}
       <select aria-label="批量修改优先级" value="" disabled={saving} onChange={event => submitPatches(selectedRows, { priority: event.target.value === 'clear' ? null : event.target.value })}><option value="" disabled>优先级</option>{priorities.map(priority => <option key={priority}>{priority}</option>)}<option value="clear">清空优先级</option></select>
-      <input disabled={selectedRows.some(row => !supportsTags(row.kind || kind))} aria-label="批量添加标签" placeholder="添加标签" value={bulkTag} maxLength={16} onChange={event => setBulkTag(event.target.value)}/><button type="button" disabled={!bulkTag.trim() || saving || selectedRows.some(row => !supportsTags(row.kind || kind))} onClick={async () => { const name = bulkTag.trim(); if (await submitPatches(selectedRows, row => ({ tags: [...new Set([...(row.tags || []), name])] }))) setBulkTag(''); }}>添加</button>
+      <input disabled={selectedRows.some(row => !supportsTags(row.kind || kind))} aria-label="批量添加标签" placeholder="添加标签" value={bulkTag} maxLength={16} onChange={event => setBulkTag(event.target.value)}/><button type="button" disabled={!bulkTag.trim() || saving || selectedRows.some(row => !supportsTags(row.kind || kind))} onClick={async () => { const name = bulkTag.trim(); if (await submitPatches(selectedRows, row => ({ tags: mergeTags([...(row.tags || []), name], knownTags(data)) }))) setBulkTag(''); }}>添加</button>
       {selectedRows.every(row => data?.archive_supported?.[row.kind || kind]) && <button type="button" disabled={saving} onClick={() => submitPatches(selectedRows, { archived: archiveMode !== 'archived' })}>{archiveMode === 'archived' ? <ArchiveRestore size={15}/> : <Archive size={15}/>}{archiveMode === 'archived' ? '恢复' : '归档'}</button>}
       <button type="button" onClick={() => setSelected([])} aria-label="取消批量选择"><X size={15}/></button>
     </div>}
@@ -510,7 +522,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       {visible.filter(row => row.status === status).map(row => <article key={row.id} draggable={!saving} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }} onClick={() => openEdit(row)}>
         <h3>{row.content}</h3>{kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
         {supportsTags(row.kind) && <div className="ledger-card-tags" onClick={event => event.stopPropagation()}>{(row.tags || []).map(tag => <button key={tag} type="button" className={`ledger-pill is-tag ${(filters.tags || {})[tag] ? `is-${(filters.tags || {})[tag]}` : ''}`} onClick={() => setFacet('tags', tag)}>{tag}</button>)}{taggingId === row.id ? <input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入标签" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitRowTag(row); } if (event.key === 'Escape') { tagCommit.current = true; setTaggingId(null); } }} onBlur={() => commitRowTag(row)} /> : <button type="button" className="ledger-add-tag" onClick={event => beginRowTag(event, row)}>+ 标签</button>}</div>}
-        <footer><Pill tone={priorityTone[row.priority]}>{row.priority}</Pill><span className={isOverdue(row, day) ? 'ledger-past' : ''}>{row.due || '无截止'}</span>{contextButton(row)}</footer>
+        <footer>{showCategoryColumn && <Pill tone={row.category === '优化' ? 'is-category-opt' : 'is-category-need'}>{categoryOf(row)}</Pill>}<Pill tone={priorityTone[row.priority]}>{row.priority}</Pill><span className={isOverdue(row, day) ? 'ledger-past' : ''}>{row.due || '无截止'}</span>{contextButton(row)}</footer>
       </article>)}
     </section>)}</div> : <div className="ledger-table-wrap" ref={tableScroll} role="region" aria-label="台账列表" tabIndex={0}>
       <table style={{ width: tableWidth }}>
@@ -569,7 +581,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       </table>
       {!visible.length && <div className="ledger-empty">{data ? '当前筛选下没有记录。' : '正在读取飞书表格…'}</div>}
     </div>}
-    {floatBox && <div className="ledger-float" style={floatBox.position} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = floatTags.includes(tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
+    {floatBox && <div className="ledger-float" style={floatBox.position} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = hasTag(floatTags, tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
     {contextRow && <TaskContext key={contextRow.kind + contextRow.id} row={contextRow} projects={projects} onClose={() => setContextRow(null)}/>}
     {editor && <div className="ledger-backdrop"><form className="ledger-dialog" role="dialog" aria-modal="true" aria-label={`${editor.mode === 'create' ? '新增' : '编辑'}${editorLabel}`} onSubmit={save}>
       <header className="ledger-dialog-head">
@@ -584,13 +596,14 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         <div className="ledger-split">
           <label>状态<span className="ledger-choice" role="radiogroup" aria-label="状态">{statuses.map(item => <button type="button" role="radio" aria-checked={editor.form.status === item} className={editor.form.status === item ? 'selected' : ''} key={item} onClick={() => change('status', item)}>{item}</button>)}</span></label>
           <label>优先级<span className="ledger-choice" role="radiogroup" aria-label="优先级"><button type="button" role="radio" aria-checked={!editor.form.priority} className={editor.form.priority ? '' : 'selected'} onClick={() => change('priority', '')}>不设置</button>{priorities.map(item => <button type="button" role="radio" aria-checked={editor.form.priority === item} className={editor.form.priority === item ? 'selected' : ''} key={item} onClick={() => change('priority', item)}>{item}</button>)}</span></label>
+          {editor.kind === 'task' && supportsCategory && <div className="ledger-category-editor"><span>类型</span><div className="ledger-choice" role="radiogroup" aria-label="任务类型">{taskCategories.map(value => <button type="button" role="radio" key={value} aria-label={value} aria-checked={editor.form.category === value} className={editor.form.category === value ? 'selected' : ''} onClick={() => change('category', value)}>{value}</button>)}</div>{!editor.form.category && <small>这条历史记录尚未分类，可选择后保存。</small>}</div>}
           <label>截止时间<input type="date" value={editor.form.due} onChange={event => change('due', event.target.value)} /></label>
-          {supportsTags(editor.kind) && <label className="ledger-tag-editor">标签<span className="ledger-choice" role="group" aria-label="标签">{tagOptions.map(tag => <button type="button" key={tag} aria-pressed={editor.form.tags.includes(tag)} className={editor.form.tags.includes(tag) ? 'selected' : ''} onClick={() => toggleTag(tag)}>{tag}</button>)}</span><span className="ledger-new-tag"><input aria-label="新标签" maxLength={16} value={tagDraft} placeholder="新标签，回车添加" onChange={event => setTagDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') addTag(event); }} /><button type="button" onClick={addTag}>添加</button></span></label>}
+          {supportsTags(editor.kind) && <div className="ledger-tag-editor"><span className="ledger-tag-label">模块标签<small>可多选</small></span><div className="ledger-tag-options" role="group" aria-label="模块标签">{tagOptions.length ? tagOptions.map(tag => { const selected = hasTag(editor.form.tags, tag); return <button type="button" key={tag} aria-label={tag} aria-pressed={selected} onClick={() => toggleTag(tag)}>{selected && <Check size={14} aria-hidden="true"/>}{tag}</button>; }) : <p>暂无模块标签，可在下方添加。</p>}</div><div className="ledger-new-tag"><input aria-label="新标签" maxLength={16} value={tagDraft} placeholder="添加模块标签，例如 app" onChange={event => setTagDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') addTag(event); }} /><button type="button" disabled={!tagDraft.trim()} onClick={addTag}>添加</button></div><p className="ledger-tag-help">输入新标签后直接保存也会加入；同名标签自动复用。</p></div>}
           <label>创建时间<div className="ledger-readonly">{editor.mode === 'edit' ? (rows.find(row => row.id === editor.recordId)?.created_at || '由飞书生成') : '保存后由飞书生成，不能手填'}</div></label>
         </div>
         <label>备注<textarea aria-label="备注" maxLength={2000} rows={3} value={editor.form.note} onChange={event => change('note', event.target.value)} /></label>
       </div>
-      <footer className="ledger-form-actions"><span className="ledger-caption">保存后可继续操作，后台同步；未同步的修改会保留。</span>{editor.mode === 'edit' && data?.archive_supported?.[editor.kind] && <button type="button" className="ledger-dialog-archive" disabled={saving} onClick={async () => { const row = { ...editor.base, id: editor.recordId, kind: editor.kind }; if (await submitPatches([row], { ...changedFields(editor.base, editor.form), archived: !editor.base.archived })) setEditor(null); }}>{editor.base.archived ? '恢复此记录' : '归档此记录'}</button>}<button className="ledger-primary" disabled={saving || (editor.uncertain && !editor.confirmed)}><Save size={15}/>{saving ? '正在保存…' : '保存'}</button></footer>
+      <footer className="ledger-form-actions"><span className="ledger-caption">保存后可继续操作，后台同步；未同步的修改会保留。</span>{editor.mode === 'edit' && data?.archive_supported?.[editor.kind] && <button type="button" className="ledger-dialog-archive" disabled={saving} onClick={async () => { const row = { ...editor.base, id: editor.recordId, kind: editor.kind }; if (await submitPatches([row], { ...changedFields(editor.base, editorValues()), archived: !editor.base.archived })) setEditor(null); }}>{editor.base.archived ? '恢复此记录' : '归档此记录'}</button>}<button className="ledger-primary" disabled={saving || (editor.uncertain && !editor.confirmed)}><Save size={15}/>{saving ? '正在保存…' : '保存'}</button></footer>
     </form></div>}
   </section>;
 }

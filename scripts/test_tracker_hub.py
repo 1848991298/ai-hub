@@ -25,7 +25,7 @@ class MemoryClient:
         row = {
             'id': 'rec' + str(len(self.creates)), 'kind': kind, 'content': fields['内容'], 'status': fields['状态'],
             'created_at': '2026-11-01 17:00', 'due': fields['截止时间'][:10] if fields.get('截止时间') else None,
-            'priority': fields.get('优先级'), 'note': fields.get('备注') or '', 'tags': list(fields.get('标签') or []),
+            'priority': fields.get('优先级'), 'note': fields.get('备注') or '', 'tags': list(fields.get('标签') or []), 'category': fields.get('类型'),
         }
         self.rows[kind].append(row)
         return row['id']
@@ -43,6 +43,7 @@ class MemoryClient:
                 if '备注' in fields: row['note'] = fields['备注']
                 if '标签' in fields: row['tags'] = list(fields['标签'] or [])
                 if '已归档' in fields: row['archived'] = fields['已归档']
+                if '类型' in fields: row['category'] = fields['类型']
                 return
         raise TrackerError('飞书里已经没有这条记录。', 404)
 
@@ -75,6 +76,9 @@ class TrackerTests(unittest.TestCase):
         if 'archived' in TABLES['task']['fields']:
             task_ids.append(TABLES['task']['fields']['archived'])
             task.append(False)
+        if 'category' in TABLES['task']['fields']:
+            task_ids.append(TABLES['task']['fields']['category'])
+            task.append(None)
         parsed = normalize('task', task_ids, 'recFixtureTask', task)
         self.assertEqual(parsed['note'], '备注文字')
         self.assertIsNone(parsed['due'])

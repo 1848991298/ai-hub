@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalStatus, isDone, isOverdue, statuses, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, stretchLastColumn, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
+import { categoryOf, taskCategories, mergeTags, hasTag, canonicalStatus, isDone, isOverdue, statuses, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, stretchLastColumn, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
 
 const rows = [
   { id: 'a', content: '过期未结束', status: '未启动', priority: 'P1', due: '2026-10-01', created_at: '2026-10-01 09:00', note: '' },
@@ -181,4 +181,21 @@ test('归档和完成不参与逾期提醒，测试中仍按实际截止日期�
   assert.equal(isOverdue({status:'开发中',due:'2026-11-01',archived:true},'2026-11-10'),false);
   assert.equal(isOverdue({status:'已完成',due:'2026-11-01'},'2026-11-10'),false);
   assert.equal(isOverdue({status:'测试中',due:'2026-11-01'},'2026-11-10'),true);
+});
+
+
+test('输入 APP 复用已有 app，标签去空格并避免大小写重复', () => {
+  assert.deepEqual(mergeTags([' APP ', 'app', 'TSDB', ' tsdb ', '充电仓'], ['app']), ['app', 'TSDB', '充电仓']);
+  assert.equal(hasTag(['app'], 'APP'), true);
+  assert.deepEqual(knownTags({tag_options:['app'], tasks:[{tags:['APP','充电仓']}]}), ['app','充电仓']);
+});
+
+
+test('类型与模块标签独立，历史记录未分类，问题不变成需求', () => {
+  assert.deepEqual(taskCategories, ['需求','优化']);
+  const rows = [{id:'a',kind:'task',category:'需求',tags:['app']},{id:'b',kind:'task',category:'优化',tags:['app']},{id:'c',kind:'task'},{id:'d',kind:'issue'}];
+  assert.equal(categoryOf(rows[2]), '未分类');assert.equal(categoryOf(rows[3]), '问题');
+  assert.deepEqual(filterRecords(rows,{...emptyFilters(),category:{'优化':'include'}},'2026-11-10').map(row=>row.id),['b']);
+  assert.deepEqual(changedFields({category:'需求',tags:['app']},{category:'优化',tags:['app']}),{category:'优化'});
+  assert.deepEqual(columnSequence(['content','note']).slice(0,3),['content','category','note']);
 });

@@ -21,8 +21,9 @@ ZONE = ZoneInfo('Asia/Shanghai')
 STATUSES = ('未启动', '开发中', '测试中', '已完成')
 STATUS_ALIASES = {'进行中': '开发中', '已结束': '已完成'}
 PRIORITIES = ('P0', 'P1', 'P2')
-NAMES = {'content': '内容', 'status': '状态', 'due': '截止时间', 'priority': '优先级', 'note': '备注', 'tags': '标签', 'archived': '已归档'}
-EDITABLE = ('content', 'status', 'due', 'priority', 'note', 'tags', 'archived')
+CATEGORIES = ('需求', '优化')
+NAMES = {'content': '内容', 'status': '状态', 'due': '截止时间', 'priority': '优先级', 'note': '备注', 'tags': '标签', 'archived': '已归档', 'category': '类型'}
+EDITABLE = ('content', 'status', 'due', 'priority', 'note', 'tags', 'archived', 'category')
 
 
 def canonical_status(value):
@@ -122,6 +123,7 @@ def normalize(kind, field_ids, record_id, cells):
         'note': text_cell(by_id[expected['note']]),
         'tags': tag_list(by_id.get(expected.get('tags'))),
         'archived': by_id.get(expected.get('archived')) is True,
+        'category': choice(by_id.get(expected.get('category'))) if kind == 'task' else None,
     }
 
 
@@ -269,6 +271,8 @@ class TrackerService:
                 'tag_options': self._tag_options(),
                 'tag_fields': {kind: 'tags' in table['fields'] for kind, table in TABLES.items()},
                 'archive_supported': {kind: 'archived' in table['fields'] for kind, table in TABLES.items()},
+                'category_fields': {kind: kind == 'task' and 'category' in table['fields'] for kind, table in TABLES.items()},
+                'category_options': list(CATEGORIES),
             }
         jobs = self.outbox.jobs()
         shown = []
@@ -284,7 +288,7 @@ class TrackerService:
             current = next((row for row in cloud[kind] if row['id'] == record_id), None)
             row = next((row for row in rows[kind] if row['id'] == record_id), None)
             if operation == 'create':
-                draft = {'content': '', 'status': '未启动', 'due': None, 'priority': None, 'note': '', 'tags': [], 'archived': False,
+                draft = {'content': '', 'status': '未启动', 'due': None, 'priority': None, 'note': '', 'tags': [], 'archived': False, 'category': '需求' if kind == 'task' and 'category' in TABLES[kind]['fields'] else None,
                          **{key: body[key] for key in EDITABLE if key in body}}
                 draft.update(status=canonical_status(body.get('status') or '未启动'), archived=False)
                 if not row:
@@ -395,6 +399,8 @@ class TrackerService:
             if item['operation'] == 'create':
                 form = self._clean_patch(kind, {key: item.get(key) for key in EDITABLE if key in item})
                 form.setdefault('status', '未启动')
+                if kind == 'task' and 'category' in TABLES[kind]['fields']:
+                    form.setdefault('category', '需求')
                 if 'content' not in form:
                     raise TrackerError('请填写内容。')
                 data = dict(form, kind=kind, client_request_id=job_id)
@@ -446,6 +452,12 @@ class TrackerService:
                 if value not in STATUSES:
                     raise TrackerError('状态只能是未启动、开发中、测试中或已完成。')
                 result[key] = value
+            elif key == 'category':
+                if kind != 'task' or 'category' not in TABLES[kind]['fields']:
+                    raise TrackerError('此表尚未配置任务类型。')
+                if value not in CATEGORIES:
+                    raise TrackerError('任务类型请选择需求或优化。')
+                result[key] = value
             elif key == 'archived':
                 if 'archived' not in TABLES[kind]['fields']:
                     raise TrackerError('飞书归档字段尚未配置，请先完成台账配置。')
@@ -495,6 +507,13 @@ class TrackerService:
         tags = self._tags(body.get('tags'))
         if tags and 'tags' not in TABLES[kind]['fields']:
             raise TrackerError('此表还未配置标签字段。')
+        category = None
+        if kind == 'task' and 'category' in TABLES[kind]['fields']:
+            category = body.get('category', '需求')
+            if category not in CATEGORIES:
+                raise TrackerError('任务类型请选择需求或优化。')
+        elif body.get('category') is not None:
+            raise TrackerError('此表尚未配置任务类型。')
         self._ensure_tags(tags)
         with self.lock:
             seen = self._seen.get(request_id)
@@ -514,6 +533,8 @@ class TrackerService:
                 raise TrackerError('这次提交已经发给飞书，但列表里还没有它。请刷新，不要重新新建。', 409)
             return {'record': row, 'snapshot': self.snapshot(), 'duplicate': True}
         fields = {'内容': content, '状态': status}
+        if category:
+            fields['类型'] = category
         if priority:
             fields['优先级'] = priority
         if due:
@@ -592,6 +613,8 @@ class TrackerService:
                 tags = self._tags(value)
                 self._ensure_tags(tags)
                 fields['标签'] = tags
+            elif key == 'category':
+                fields['类型'] = value
             elif key == 'archived':
                 fields['已归档'] = value
         if not fields:
