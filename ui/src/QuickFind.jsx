@@ -15,7 +15,7 @@ function matches(data, ledger, query) {
     data.projects.map(item => ({ id: item.id, title: item.name, detail: item.repository, params: { resource: item.id } })),
     data.skills.map(item => ({ id: item.id, title: item.title, detail: item.id, params: { resource: item.id } })),
     data.rules.sections.map(item => ({ id: item.id, title: item.title, detail: '共享全局规则', params: { section: item.title } })),
-    term ? records.map(item => ({ id: item.kind + item.id, title: item.content, detail: (item.kind === 'task' ? '任务' : '问题') + ' · ' + item.status, params: { kind: item.kind, record: item.id }, keywords: (item.tags || []).join(' ') + ' ' + item.id })) : [],
+    term ? records.map(item => ({ id: item.kind + item.id, title: item.content, detail: (item.kind === 'task' ? '任务' : '问题') + ' · ' + item.status, params: { kind: item.kind, record: item.id, archive: item.archived ? 'archived' : 'active' }, keywords: (item.tags || []).join(' ') + ' ' + item.id })) : [],
   ];
   return groups.map(([label, Icon, page], index) => {
     const found = lists[index].filter(item => [item.title, item.detail, item.keywords].join(' ').toLowerCase().includes(term));

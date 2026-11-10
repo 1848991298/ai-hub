@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, stretchLastColumn, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
+import { canonicalStatus, isDone, isOverdue, statuses, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, stretchLastColumn, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
 
 const rows = [
   { id: 'a', content: '过期未结束', status: '未启动', priority: 'P1', due: '2026-10-01', created_at: '2026-10-01 09:00', note: '' },
@@ -166,4 +166,19 @@ test('换列序或隐藏标签后由最后可见列补齐，窗口变化不改�
   assert.ok(!Object.hasOwn(large, 'tags'));
   for (const key of keys.slice(0, -1)) assert.equal(large[key], small[key]);
   assert.deepEqual(stretchLastColumn(fixed, 100, []), {});
+});
+
+
+test('四阶段排序与旧状态兼容，测试中仍是未完成', () => {
+  assert.deepEqual(statuses, ['未启动', '开发中', '测试中', '已完成']);
+  assert.equal(canonicalStatus('进行中'), '开发中');assert.equal(canonicalStatus('已结束'), '已完成');
+  const data = ['已完成','测试中','未启动','开发中'].map((status,index)=>({id:String(index),status}));
+  assert.deepEqual(sortRecords(data,{key:'status',dir:'asc'},false).map(row=>row.status),statuses);
+  assert.equal(isDone({status:'测试中'}),false);assert.equal(isDone({status:'已结束'}),true);
+});
+
+test('归档和完成不参与逾期提醒，测试中仍按实际截止日期计算', () => {
+  assert.equal(isOverdue({status:'开发中',due:'2026-11-01',archived:true},'2026-11-10'),false);
+  assert.equal(isOverdue({status:'已完成',due:'2026-11-01'},'2026-11-10'),false);
+  assert.equal(isOverdue({status:'测试中',due:'2026-11-01'},'2026-11-10'),true);
 });

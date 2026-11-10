@@ -1,11 +1,13 @@
-export const statuses = ['未启动', '进行中', '已结束'];
+export const statuses = ['未启动', '开发中', '测试中', '已完成'];
 export const priorities = ['P0', 'P1', 'P2'];
+export const canonicalStatus = status => ({ '进行中': '开发中', '已结束': '已完成' }[status] || status);
+export const isDone = row => canonicalStatus(row.status) === '已完成';
 
 export function orderedRows(rows, saved, sinkDone = false) {
   const ids = Array.isArray(saved) ? saved : [];
   const rank = new Map(ids.map((id, index) => [id, index]));
   return [...rows].sort((a, b) => {
-    if (sinkDone && (a.status === '已结束') !== (b.status === '已结束')) return a.status === '已结束' ? 1 : -1;
+    if (sinkDone && isDone(a) !== isDone(b)) return isDone(a) ? 1 : -1;
     const left = rank.has(a.id) ? rank.get(a.id) : ids.length;
     const right = rank.has(b.id) ? rank.get(b.id) : ids.length;
     if (left !== right) return left - right;
@@ -39,7 +41,7 @@ export function cycleFacet(map, value) {
 }
 
 export function isOverdue(row, today) {
-  return !!(row.due && row.due < today && row.status !== '已结束');
+  return !!(!row.archived && row.due && row.due < today && !isDone(row));
 }
 
 function tagMatches(tags, map) {
@@ -72,7 +74,7 @@ export function filterRecords(rows, filters, today) {
 }
 
 const priorityRank = { P0: 0, P1: 1, P2: 2 };
-const statusRank = { '未启动': 0, '进行中': 1, '已结束': 2 };
+const statusRank = { '未启动': 0, '开发中': 1, '测试中': 2, '已完成': 3 };
 
 function compareKnown(rank, left, right, dir) {
   const a = rank[left];
@@ -94,11 +96,11 @@ export function sortRecords(rows, sort, sinkDone = true) {
   const key = sort?.key || 'due';
   const dir = sort?.dir === 'desc' ? 'desc' : 'asc';
   return [...rows].sort((a, b) => {
-    if (sinkDone && (a.status === '已结束') !== (b.status === '已结束')) return a.status === '已结束' ? 1 : -1;
+    if (sinkDone && isDone(a) !== isDone(b)) return isDone(a) ? 1 : -1;
     let difference = 0;
     if (key === 'created') difference = compareDate(a.created_at, b.created_at, dir);
     else if (key === 'priority') difference = compareKnown(priorityRank, a.priority, b.priority, dir);
-    else if (key === 'status') difference = compareKnown(statusRank, a.status, b.status, dir);
+    else if (key === 'status') difference = compareKnown(statusRank, canonicalStatus(a.status), canonicalStatus(b.status), dir);
     else difference = compareDate(a.due, b.due, dir);
     if (difference) return difference;
     return (a.created_at || '').localeCompare(b.created_at || '') || (a.id || '').localeCompare(b.id || '');
@@ -117,11 +119,12 @@ export function changedFields(base, values) {
     if ((base[key] || '') !== (values[key] || '')) patch[key] = values[key] || null;
   }
   if ((base.tags || []).join('\n') !== (values.tags || []).join('\n')) patch.tags = values.tags || [];
+  if (Boolean(base.archived) !== Boolean(values.archived)) patch.archived = Boolean(values.archived);
   return patch;
 }
 
 export function blankForm() {
-  return { content: '', status: '未启动', due: '', priority: '', note: '', tags: [] };
+  return { content: '', status: '未启动', due: '', priority: '', note: '', tags: [], archived: false };
 }
 
 export function knownTags(data) {

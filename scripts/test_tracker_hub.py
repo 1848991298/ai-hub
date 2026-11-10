@@ -2,8 +2,10 @@
 """台账同步的内存验证：不调用飞书，不改两条真实模拟记录。"""
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
-from tracker_hub import TABLES, TrackerError, TrackerService, normalize
+from tracker_hub import TABLES, TrackerError, TrackerService, LarkClient, normalize
 
 
 class MemoryClient:
@@ -40,6 +42,7 @@ class MemoryClient:
                 if '截止时间' in fields: row['due'] = None if fields['截止时间'] is None else fields['截止时间'][:10]
                 if '备注' in fields: row['note'] = fields['备注']
                 if '标签' in fields: row['tags'] = list(fields['标签'] or [])
+                if '已归档' in fields: row['archived'] = fields['已归档']
                 return
         raise TrackerError('飞书里已经没有这条记录。', 404)
 
@@ -58,6 +61,9 @@ class TrackerTests(unittest.TestCase):
     def test_real_column_order_does_not_decide_fields(self):
         issue_ids = [TABLES['issue']['fields'][name] for name in ('content','created','status','priority','due','note','tags')]
         issue = ['示例问题内容', '2026-11-01T16:31:54.000+08:00', ['未启动'], ['P1'], '2026-11-02T00:00:00.000+08:00', '模拟', ['充电仓', 'TSDB']]
+        if 'archived' in TABLES['issue']['fields']:
+            issue_ids.append(TABLES['issue']['fields']['archived'])
+            issue.append(False)
         row = normalize('issue', issue_ids, 'recFixtureIssue', issue)
         self.assertEqual(row['content'], '示例问题内容')
         self.assertEqual(row['created_at'], '2026-11-01 16:31')
@@ -66,11 +72,20 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(row['tags'], ['充电仓', 'TSDB'])
         task_ids = [TABLES['task']['fields'][name] for name in ('content','note','status','created','due','priority','tags')]
         task = ['任务内容', '备注文字', ['未启动'], '2026-11-01T16:35:07.000+08:00', None, ['P2'], []]
+        if 'archived' in TABLES['task']['fields']:
+            task_ids.append(TABLES['task']['fields']['archived'])
+            task.append(False)
         parsed = normalize('task', task_ids, 'recFixtureTask', task)
         self.assertEqual(parsed['note'], '备注文字')
         self.assertIsNone(parsed['due'])
         self.assertEqual(parsed['priority'], 'P2')
         self.assertEqual(parsed['tags'], [])
+
+    def test_malformed_write_response_does_not_allow_blind_create_retry(self):
+        client = LarkClient(lambda *args, **kwargs: SimpleNamespace(stdout='not-json', stderr='', returncode=0))
+        with patch('tracker_hub.BASE_TOKEN', 'ExampleBase'), self.assertRaises(TrackerError) as result:
+            client.invoke(['base', '+record-batch-create'])
+        self.assertTrue(result.exception.uncertain)
 
     def test_create_defaults_and_empty_due_are_not_invented(self):
         result = self.service.create({'kind': 'task', 'client_request_id': 'abc12345-def', 'content': '  新任务  ', 'priority': '', 'due': ''})
@@ -97,9 +112,9 @@ class TrackerTests(unittest.TestCase):
         self.service.refresh()
         self.client.rows['issue'][0]['note'] = '飞书刚改的备注'
         result = self.service.update({'kind': 'issue', 'record_id': 'recFixtureIssue', 'base': sample(), 'patch': {'status': '进行中'}})
-        self.assertEqual(self.client.updates[0][2], {'状态': '进行中'})
+        self.assertEqual(self.client.updates[0][2], {'状态': '开发中'})
         self.assertEqual(result['record']['note'], '飞书刚改的备注')
-        self.assertEqual(result['record']['status'], '进行中')
+        self.assertEqual(result['record']['status'], '开发中')
 
     def test_conflict_and_failed_update_do_not_overwrite_or_drop_input(self):
         self.client.rows['issue'] = [sample()]

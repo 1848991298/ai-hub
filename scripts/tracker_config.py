@@ -6,6 +6,7 @@ import re
 from urllib.parse import urlsplit
 
 FIELD_NAMES = ('content', 'status', 'created', 'due', 'priority', 'note', 'tags')
+OPTIONAL_FIELDS = ('archived',)
 REQUIRED_FIELDS = set(FIELD_NAMES) - {'tags'}
 DEFAULT_TABLES = {
     kind: {'id': '', 'label': label,
@@ -38,7 +39,7 @@ def load_settings(root):
             if not isinstance(item.get('id'), str) or not re.fullmatch(r'tbl[A-Za-z0-9]+', item['id']):
                 raise ValueError()
             fields = item.get('fields')
-            if not isinstance(fields, dict) or not REQUIRED_FIELDS <= set(fields) <= set(FIELD_NAMES):
+            if not isinstance(fields, dict) or not REQUIRED_FIELDS <= set(fields) or set(fields) - set(FIELD_NAMES + OPTIONAL_FIELDS):
                 raise ValueError()
             if any(not isinstance(v, str) or not re.fullmatch(r'fld[A-Za-z0-9]+', v) for v in fields.values()) or len(set(fields.values())) != len(fields):
                 raise ValueError()

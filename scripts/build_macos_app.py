@@ -98,6 +98,7 @@ def main():
         shutil.copy2(ROOT / 'scripts/market_server.py', resources / 'market_server.py')
         shutil.copy2(ROOT / 'scripts/market_collect.py', resources / 'market_collect.py')
         shutil.copy2(ROOT / 'scripts/tracker_hub.py', resources / 'tracker_hub.py')
+        shutil.copy2(ROOT / 'scripts/tracker_outbox.py', resources / 'tracker_outbox.py')
         shutil.copy2(ROOT / 'scripts/tracker_config.py', resources / 'tracker_config.py')
         shutil.copy2(ROOT / 'scripts/cursor_rules.applescript', resources / 'cursor_rules.applescript')
         info = dict(CFBundleName='AI Hub', CFBundleDisplayName='AI Hub', CFBundleExecutable='AIHub',
