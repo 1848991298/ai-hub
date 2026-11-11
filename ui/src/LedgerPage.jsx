@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Plus, RefreshCw, Save, X } from 'lucide-react';
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, SlidersHorizontal, Info, Plus, RefreshCw, Save, X } from 'lucide-react';
 import { blankForm, categoryOf, taskCategories, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
 import './ledger.css';
@@ -26,6 +26,56 @@ function valuesOf(row) {
 
 const statusTone = { '未启动': 'is-idle', '开发中': 'is-run', '测试中': 'is-test', '已完成': 'is-done' };
 const priorityTone = { P0: 'is-p0', P1: 'is-p1', P2: 'is-p2' };
+const pressedMode = mode => mode === 'include' ? 'true' : mode === 'exclude' ? 'mixed' : 'false';
+
+function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', width = 300, chevron, children }) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState(null);
+  const root = useRef(null), trigger = useRef(null), panel = useRef(null);
+  const id = useId();
+  useLayoutEffect(() => {
+    if (!open) return;
+    function place() {
+      const rect = trigger.current.getBoundingClientRect();
+      const size = Math.min(width, innerWidth - 24);
+      const top = rect.bottom + 8;
+      setPosition({ width: size, left: Math.max(12, Math.min(align === 'end' ? rect.right - size : rect.left, innerWidth - size - 12)), top, maxHeight: Math.max(80, innerHeight - top - 12) });
+    }
+    function outside(event) { if (!root.current?.contains(event.target)) setOpen(false); }
+    function escape(event) {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current.focus(); }
+    }
+    function scroll(event) { if (!root.current?.contains(event.target)) setOpen(false); }
+    place();
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('focusin', outside);
+    document.addEventListener('keydown', escape);
+    document.addEventListener('scroll', scroll, true);
+    addEventListener('resize', place);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('focusin', outside);
+      document.removeEventListener('keydown', escape);
+      document.removeEventListener('scroll', scroll, true);
+      removeEventListener('resize', place);
+    };
+  }, [open, align, width]);
+  return <div className="ledger-menu" ref={root}>
+    <button type="button" ref={trigger} className="ledger-menu-trigger" aria-label={triggerLabel} title={count ? `${count} 项筛选条件` : undefined} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)} onKeyDown={event => {
+      if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); requestAnimationFrame(() => panel.current?.querySelector('button, input, select, summary')?.focus()); }
+    }}><Icon size={14}/>{triggerLabel}{count > 0 && <b>{count}</b>}{chevron && <ChevronDown size={12}/>}</button>
+    {open && <div id={id} ref={panel} className="ledger-menu-panel" role="dialog" aria-label={label} style={position || { visibility: 'hidden' }}>
+      {typeof children === 'function' ? children(() => { setOpen(false); trigger.current.focus(); }) : children}
+    </div>}
+  </div>;
+}
+
+function FilterOptions({ values, modes, counts, onChange }) {
+  return <div className="ledger-facet-options">{values.map(value => <button key={value} type="button" aria-pressed={pressedMode(modes?.[value])} onClick={() => onChange(value)}>
+    <span className={'ledger-option-mark ' + (modes?.[value] || '')} aria-hidden="true">{modes?.[value] === 'include' ? <Check size={12}/> : modes?.[value] === 'exclude' ? '−' : ''}</span>
+    <span>{value}</span><em>{counts[value] || 0}</em>
+  </button>)}</div>;
+}
 
 function Pill({ tone, mode, onClick, children }) {
   if (!children) return '—';
@@ -59,7 +109,7 @@ function ColumnResize({ label, value, minimum, maximum, fallback, onChange }) {
 
 const columnLabels = { content: '内容', category: '类型', status: '状态', due: '截止时间', priority: '优先级', tags: '标签', created: '创建时间', note: '备注' };
 const sortableColumns = ['status', 'created', 'due', 'priority', 'category'];
-const rowIndexWidth = 84;
+const rowIndexWidth = 40;
 
 function savedValue(key) {
   try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
@@ -407,7 +457,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     ...(filters.overdue ? [{ key: 'overdue', label: filters.overdue === 'exclude' ? '排除已过截止' : '只看已过截止', clear: () => changeOverdue(null) }] : []),
   ];
   const synced = data?.synced_at ? new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未成功';
-  const label = { issue: '问题', task: '任务', all: '全部记录' }[kind];
+  const readError = Boolean(data?.error || (!data && error));
+  const syncTone = failedJobs.length || readError ? 'is-error' : data?.sync?.pending ? 'is-pending' : data?.synced_at ? '' : 'is-idle';
+  const syncLabel = failedJobs.length ? `${failedJobs.length} 项修改待处理` : data?.sync?.pending ? `后台同步 ${data.sync.pending} 项` : readError ? '读取异常 · 保留上次记录' : data?.synced_at ? `已同步 · ${synced}` : loading ? '正在读取…' : '尚未成功读取';
+  const syncHelp = '飞书是主数据。打开页面、手动刷新及服务运行期间定期读取。退出 Hub 后停止；截止时间只用于筛选，不会自动完成。';
   const editorLabel = editor?.kind === 'task' ? '任务' : '问题';
   function contextButton(row) {
     return <button type="button" className="ledger-context-trigger" title="查看执行资料" aria-label={'执行资料 · ' + row.content} onClick={event => { event.stopPropagation(); setContextRow(row); }}><ClipboardList size={15}/></button>;
@@ -428,6 +481,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     switch (key) {
       case 'content': return <td key={key}>
         <div className="ledger-content">
+          {allowReorder && manualOrder && <span className="ledger-grip" draggable aria-hidden="true" title="拖动调整行顺序" onClick={event => event.stopPropagation()}
+              onDragStart={event => { rowDrag.current = { id: row.id, done: isDone(row) }; event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }}
+              onDragEnd={() => { rowDrag.current = null; setRowTarget(null); }}><GripVertical size={14}/></span>}
+
           {kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
           <button type="button" className="ledger-row-title" title={row.content} onClick={event => { event.stopPropagation(); openEdit(row); }}>{row.content}</button>
           {contextButton(row)}
@@ -445,7 +502,9 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
           }}>{tags.length > 1 ? `+${tags.length - 1}` : <Plus size={14}/>}</button>
         </div>
       </td>;
-      case 'category': return <td key={key}><Pill tone={row.kind === 'issue' ? '' : row.category === '优化' ? 'is-category-opt' : row.category ? 'is-category-need' : ''} mode={filters.category?.[categoryOf(row)]} onClick={() => setFacet('category', categoryOf(row))}>{categoryOf(row)}</Pill></td>;
+      case 'category': return <td key={key}>{row.kind !== 'issue' && !row.category
+        ? <button type="button" className="ledger-empty-value" title="未分类 · 点击筛选" aria-label="筛选未分类" aria-pressed={pressedMode(filters.category?.['未分类'])} onClick={event => { event.stopPropagation(); setFacet('category', '未分类'); }}>—</button>
+        : <Pill tone={row.kind === 'issue' ? '' : row.category === '优化' ? 'is-category-opt' : 'is-category-need'} mode={filters.category?.[categoryOf(row)]} onClick={() => setFacet('category', categoryOf(row))}>{categoryOf(row)}</Pill>}</td>;
       case 'status': return <td key={key}><Pill tone={statusTone[row.status]} mode={filters.status[row.status]} onClick={() => setFacet('status', row.status)}>{row.status}</Pill></td>;
       case 'created': return <td key={key} className="ledger-time" title={row.created_at || undefined}>{shortClock(row.created_at)}</td>;
       case 'due': return <td key={key} className={overdue ? 'ledger-time ledger-past' : 'ledger-time'} title={overdue ? `${row.due} · 逾期` : undefined}>{row.due || '—'}{overdue && <span className="ledger-overdue-dot" aria-label="逾期" />}</td>;
@@ -458,7 +517,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     <header className="ledger-head">
       <div>
         <h1>问题与任务<span>.</span></h1>
-        <p>飞书是主数据。打开页面和手动刷新会立即读，服务运行时大约每 30 秒再读一次。</p>
+        <p className="ledger-sync-caption"><span className={'ledger-connected-dot ' + syncTone} aria-hidden="true"/><span title={synced}>{syncLabel}</span><span className="ledger-info" role="img" tabIndex={0} aria-label={syncHelp} title={syncHelp}><Info size={13}/></span></p>
       </div>
       <div className="ledger-actions">
         {data?.base_url && <a href={data.base_url} target="_blank" rel="noreferrer">打开飞书表格</a>}
@@ -476,39 +535,38 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       </div></div>)}
     </section>}
     {message && <div className="ledger-ok" role="status">{message}</div>}
-    <div className="ledger-meta"><span>最近成功读取：{synced}</span><span>退出 Hub 后停止读取。到期只用于筛选，不会自动完成。</span></div>
-    <section className="ledger-overview" aria-label={`${label}总览`}>
-      <div className="ledger-stat-row">
-        {statuses.map(item => <button key={item} type="button" className={`ledger-stat ${filters.status[item] ? `is-${filters.status[item]}` : ''}`} aria-pressed={filters.status[item] ? 'true' : 'false'} onClick={() => setFacet('status', item)}><strong>{counts.status[item]}</strong><small>{item}</small></button>)}
-        {priorities.map(item => <button key={item} type="button" className={`ledger-stat ${filters.priority[item] ? `is-${filters.priority[item]}` : ''}`} aria-pressed={filters.priority[item] ? 'true' : 'false'} onClick={() => setFacet('priority', item)}><strong>{counts.priority[item]}</strong><small>{item}</small></button>)}
-        <button type="button" className={`ledger-stat ${filters.overdue ? `is-${filters.overdue}` : ''}`} aria-pressed={filters.overdue ? 'true' : 'false'} onClick={() => changeOverdue(cycleMode(filters.overdue))}><strong>{counts.overdue}</strong><small>已过截止</small></button>
-      </div>
-      {showCategoryColumn && <div className="ledger-chips ledger-category-filters" aria-label="类型筛选"><span>类型</span>{[...taskCategories, '未分类', ...(kind === 'all' ? ['问题'] : [])].map(value => <button key={value} type="button" className={`ledger-chip ${filters.category?.[value] ? `is-${filters.category[value]}` : ''}`} aria-pressed={Boolean(filters.category?.[value])} onClick={() => setFacet('category', value)}>{value}<em>{rows.filter(row => categoryOf(row) === value).length}</em></button>)}</div>}
-      {!!tagOptions.length && <div className="ledger-chips" aria-label="标签">{tagOptions.map(tag => <button key={tag} type="button" className={`ledger-chip ${(filters.tags || {})[tag] ? `is-${(filters.tags || {})[tag]}` : ''}`} aria-pressed={(filters.tags || {})[tag] ? 'true' : 'false'} onClick={() => setFacet('tags', tag)}>{tag}<em>{tagCounts[tag] || 0}</em></button>)}</div>}
-      {(!!chips.length || recordId) && <div className="ledger-chips">{recordId && <button type="button" className="ledger-chip" onClick={() => navigate?.({ kind, overdue: route.overdue })}>搜索定位到的记录<X size={13}/></button>}{chips.map(chip => <button key={chip.key} type="button" className="ledger-chip" onClick={chip.clear}>{chip.label}<X size={13} /></button>)}<button type="button" className="ledger-chip is-clear" onClick={clearFilters}>清除筛选</button></div>}
-    </section>
     {hint && <div className="ledger-archive-hint"><Archive size={15}/><span>已有 {completed.length} 条已完成记录，可归档后收起，随时恢复。</span><button type="button" onClick={() => setSelected(completed.slice(0,100).map(selectionKey))}>选择已完成记录</button><button type="button" aria-label="暂不提示归档" onClick={dismissArchiveHint}><X size={14}/></button></div>}
-    <div className="ledger-toolbar">
-      <div className="ledger-toolbar-group">
+    {!selectedRows.length && <div className="ledger-toolbar">
+      <div className="ledger-toolbar-group ledger-main-filters">
         <div className="ledger-tabs" role="group" aria-label="记录类型">
           {[['all', '全部', issues.length + tasks.length], ['issue', '问题', issues.length], ['task', '任务', tasks.length]].map(([id, name, size]) => <button type="button" key={id} aria-pressed={kind === id} className={kind === id ? 'selected' : ''} onClick={() => chooseKind(id)}>{name} <em>{data ? size : ''}</em></button>)}
         </div>
-        <select className="ledger-archive-scope" aria-label="记录范围" value={archiveMode} onChange={event => { setArchiveMode(event.target.value); setSelected([]); }}><option value="active">当前记录</option><option value="archived">已归档 {archivedCount}</option><option value="all">全部（含归档）</option></select>
-        <div className="ledger-tabs" role="group" aria-label="视图">
-          <button type="button" aria-pressed={view === 'list'} className={view === 'list' ? 'selected' : ''} onClick={() => chooseView('list')}>列表</button>
-          <button type="button" aria-pressed={view === 'board'} className={view === 'board' ? 'selected' : ''} onClick={() => chooseView('board')}>看板</button>
-        </div>
+        <span className="ledger-toolbar-divider"/>
+        <LedgerMenu label="筛选记录" triggerLabel="筛选" icon={Filter} count={chips.length}>
+          <div className="ledger-filter-panel">
+            <header><strong>筛选记录</strong><button type="button" onClick={clearFilters}>重置</button></header>
+            <p>点击选入，再次点击排除。</p>
+            <section><h3>状态</h3><FilterOptions values={statuses} modes={filters.status} counts={counts.status} onChange={value => setFacet('status', value)}/></section>
+            {showCategoryColumn && <section><h3>类型</h3><FilterOptions values={[...taskCategories, '未分类', ...(kind === 'all' ? ['问题'] : [])]} modes={filters.category} counts={Object.fromEntries([...taskCategories, '未分类', '问题'].map(value => [value, rows.filter(row => categoryOf(row) === value).length]))} onChange={value => setFacet('category', value)}/></section>}
+            <section><h3>优先级</h3><FilterOptions values={priorities} modes={filters.priority} counts={counts.priority} onChange={value => setFacet('priority', value)}/></section>
+            {!!tagOptions.length && <section><h3>标签</h3><FilterOptions values={tagOptions} modes={filters.tags} counts={tagCounts} onChange={value => setFacet('tags', value)}/></section>}
+            <footer><button type="button" aria-pressed={pressedMode(filters.overdue)} onClick={() => changeOverdue(cycleMode(filters.overdue))}>{filters.overdue === 'exclude' ? '排除逾期' : '只看逾期'} <em>{counts.overdue}</em></button></footer>
+          </div>
+        </LedgerMenu>
+        {chips.slice(0,2).map(chip => <button key={chip.key} type="button" className="ledger-active-filter" title={chip.label} onClick={chip.clear}><span>{chip.label}</span><X size={12}/></button>)}
+        {recordId && <button type="button" className="ledger-active-filter" onClick={() => navigate?.({ kind, overdue: route.overdue })}>定位记录<X size={12}/></button>}
       </div>
       <div className="ledger-toolbar-group ledger-toolbar-actions">
-        {data?.sync?.pending > 0 && <span className="ledger-sync-pending" role="status">后台同步 {data.sync.pending}</span>}
-        <span className="ledger-result-count" aria-live="polite">{data ? <>显示 <strong>{visible.length}</strong> / {rows.length} 条</> : '读取中…'}</span>
-        {view === 'board' ? <span className="ledger-caption">拖到另一列可改状态</span> : <>
-          {allowReorder && manualIds.length > 0 && <button type="button" className="ledger-layout-button" aria-pressed={manualOrder} onClick={() => saveOrder(manualIds, !manualOrder)}>手动行序</button>}
-          <div className="ledger-tabs ledger-width-mode" role="group" aria-label="表格宽度模式"><button type="button" aria-pressed={widthMode === 'fill'} className={widthMode === 'fill' ? 'selected' : ''} onClick={() => setWidthMode('fill')}>适应窗口</button><button type="button" aria-pressed={widthMode === 'manual'} className={widthMode === 'manual' ? 'selected' : ''} onClick={() => setWidthMode('manual')}>手动列宽</button></div>
+        <span className="ledger-result-count" aria-live="polite">{data ? <><strong>{visible.length}</strong>{visible.length !== rows.length ? ` / ${rows.length}` : ""} 条记录</> : '读取中…'}</span>
+        <select className="ledger-archive-scope" aria-label="记录范围" value={archiveMode} onChange={event => { setArchiveMode(event.target.value); setSelected([]); }}><option value="active">当前记录</option><option value="archived">已归档 {archivedCount}</option><option value="all">全部（含归档）</option></select>
+        <LedgerMenu label="视图设置" triggerLabel="视图" icon={SlidersHorizontal} align="end" width={340} chevron>{close => <div className="ledger-view-panel">
+          <h3>显示方式</h3><div className="ledger-tabs" role="group" aria-label="视图"><button type="button" aria-pressed={view === 'list'} className={view === 'list' ? 'selected' : ''} onClick={() => { chooseView('list'); close(); }}>列表</button><button type="button" aria-pressed={view === 'board'} className={view === 'board' ? 'selected' : ''} onClick={() => { chooseView('board'); close(); }}>看板</button></div>
+          <h3>列宽</h3><div className="ledger-tabs" role="group" aria-label="表格宽度模式"><button type="button" aria-pressed={widthMode === 'fill'} className={widthMode === 'fill' ? 'selected' : ''} onClick={() => setWidthMode('fill')}>适应窗口</button><button type="button" aria-pressed={widthMode === 'manual'} className={widthMode === 'manual' ? 'selected' : ''} onClick={() => setWidthMode('manual')}>手动列宽</button></div>
+          {allowReorder && <label className="ledger-manual-toggle"><input type="checkbox" checked={manualOrder} onChange={() => saveOrder(manualIds.length ? manualIds : sorted.map(row => row.id), !manualOrder)}/>手动调整行序</label>}
           <ColumnLayout widths={{ ...widths, ...fittedWidths }} hidden={hiddenColumns} visibleColumns={columns} onToggle={key => setHiddenColumns(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])} onWidth={resizeColumn} onFit={() => setWidthMode('fill')} columns={columnOrder.filter(key => (key !== 'category' || showCategoryColumn) && (key !== 'tags' || showTagColumn))} onMove={moveColumn} onReset={resetColumns}/>
-        </>}
+        </div>}</LedgerMenu>
       </div>
-    </div>
+    </div>}
     {selectedRows.length > 0 && <div className="ledger-batch-bar" role="group" aria-label="批量操作"><strong>已选 {selectedRows.length} 条</strong>
       <select aria-label="批量修改状态" value="" disabled={saving} onChange={event => submitPatches(selectedRows, { status: event.target.value })}><option value="" disabled>修改状态</option>{statuses.map(status => <option key={status}>{status}</option>)}</select>
       {supportsCategory && <select aria-label="批量修改类型" title="需求与优化适用于任务记录" value="" disabled={saving || selectedRows.some(row => row.kind !== 'task')} onChange={event => submitPatches(selectedRows, { category: event.target.value })}><option value="" disabled>类型</option>{taskCategories.map(value => <option key={value}>{value}</option>)}</select>}
@@ -528,7 +586,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       <table style={{ width: tableWidth }}>
         <colgroup><col style={{ width: rowIndexWidth }}/>{columns.map(key => <col key={key} style={{ width: fittedWidths[key] }}/>)}</colgroup>
         <thead><tr>
-          <th scope="col" className="ledger-index" aria-label="选择与行号"><div className="ledger-index-content"><input type="checkbox" aria-label="选择当前显示的记录" checked={everySelected} ref={element => { if (element) element.indeterminate = selectedRows.length > 0 && !everySelected; }} onChange={selectAll}/><span>#</span></div></th>
+          <th scope="col" className="ledger-index" aria-label="批量选择"><div className="ledger-index-content"><input type="checkbox" aria-label="选择当前显示的记录" checked={everySelected} ref={element => { if (element) element.indeterminate = selectedRows.length > 0 && !everySelected; }} onChange={selectAll}/></div></th>
           {columns.map(key => <th key={key} scope="col" data-column={key}
             aria-sort={!manualOrder && sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
             className={columnTarget?.key === key ? (columnTarget.after ? 'drop-after' : 'drop-before') : undefined}
@@ -569,12 +627,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
             rowDrag.current = null;
             setRowTarget(null);
           }}>
-          <td className="ledger-index"><div className="ledger-index-inner">
+          <td className="ledger-index" title={`第 ${index + 1} 条`}><div className="ledger-index-inner">
             <input type="checkbox" aria-label={'选择记录 · ' + row.content} checked={selected.includes(selectionKey(row))} disabled={!row.id.startsWith('rec')} onClick={event => event.stopPropagation()} onChange={() => toggleRow(row)}/>
-            {allowReorder && <span className="ledger-grip" draggable aria-hidden="true" title="拖动调整行顺序" onClick={event => event.stopPropagation()}
-              onDragStart={event => { rowDrag.current = { id: row.id, done: isDone(row) }; event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }}
-              onDragEnd={() => { rowDrag.current = null; setRowTarget(null); }}><GripVertical size={14}/></span>}
-            <span>{index + 1}</span>
           </div></td>
           {columns.map(key => renderCell(key, row))}
         </tr>)}</tbody>

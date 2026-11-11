@@ -155,7 +155,7 @@ export function knownTags(data) {
   return mergeTags(found);
 }
 
-export const ledgerColumnDefaults = { content: 300, category: 100, status: 100, due: 148, priority: 94, tags: 148, created: 134, note: 192 };
+export const ledgerColumnDefaults = { content: 300, category: 72, status: 84, due: 112, priority: 64, tags: 96, created: 124, note: 156 };
 export const ledgerColumnLimits = { content: [64, 1600], category: [48, 400], tags: [44, 800], status: [44, 400], created: [48, 600], due: [48, 600], priority: [44, 400], note: [48, 1600] };
 export const ledgerColumnOrder = Object.keys(ledgerColumnDefaults);
 
