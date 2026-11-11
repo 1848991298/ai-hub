@@ -43,6 +43,8 @@
 .ledger-chip.is-clear{color:var(--text-muted);background:transparent}
 .ledger th button{display:inline-flex;align-items:center;gap:3px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;letter-spacing:inherit}
 .ledger th button.is-sorted{color:var(--text)}
+.ledger-sort-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ledger-sort-mark{display:inline-flex;flex:none;align-items:center;gap:1px;color:var(--accent);font-size:10px;font-variant-numeric:tabular-nums}
 .ledger-pill.is-include{box-shadow:inset 0 0 0 1.5px currentColor}
 .ledger-pill.is-exclude{text-decoration:line-through;opacity:.72}
 .ledger-chips{display:flex;flex-wrap:wrap;gap:8px}
@@ -300,6 +302,18 @@
 .ledger-view-panel .ledger-tabs{display:flex;background:var(--surface-subtle)}
 .ledger-view-panel .ledger-tabs button{flex:1;justify-content:center;padding-inline:7px;white-space:nowrap}
 .ledger-manual-toggle{display:flex;align-items:center;gap:8px;margin-top:7px;padding:12px 3px;font-size:12px;color:var(--text-secondary)}
+.ledger-sort-settings{padding:8px 3px;border-top:1px solid var(--border);font-size:12px}
+.ledger-sort-settings-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px}
+.ledger-sort-settings .ledger-sort-settings-head h3{margin:0}
+.ledger-sort-settings-head button{color:var(--accent);font-size:12px}
+.ledger-sort-settings p{margin:4px 0 3px;color:var(--text-secondary)}
+.ledger-sort-settings ol{padding:0;margin:4px 0 0;list-style:none}
+.ledger-sort-settings li{display:grid;grid-template-columns:18px minmax(0,1fr) auto repeat(3,26px);align-items:center;gap:4px;min-height:32px}
+.ledger-sort-position{color:var(--accent);font-variant-numeric:tabular-nums;text-align:center}
+.ledger-sort-field{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ledger-sort-settings li button{display:inline-grid;place-items:center;min-height:26px;padding-inline:4px;border-radius:5px;color:var(--text-secondary)}
+.ledger-sort-settings li button:not(:disabled):hover{background:var(--surface-subtle);color:var(--accent)}
+.ledger-sort-settings li button:disabled{opacity:.3;cursor:default}
 .ledger-view-panel .ledger-column-layout summary{width:100%;padding-inline:4px;border:0;border-top:1px solid var(--border);border-radius:0}
 .ledger-active-filter{display:inline-flex;align-items:center;gap:6px;max-width:150px;min-width:0;padding:5px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--border);border-radius:5px;background:var(--surface);font-size:11px;color:var(--text-secondary)}
 .ledger-active-filter>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

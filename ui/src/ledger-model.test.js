@@ -37,8 +37,26 @@ test('表头排序可升降，空日期和空优先级留在后面', () => {
   assert.deepEqual(sortRecords(rows, { key: 'priority', dir: 'desc' }).map(row => row.id), ['a', 'c', 'b']);
   assert.deepEqual(sortRecords(rows, { key: 'due', dir: 'asc' }).map(row => row.id), ['a', 'c', 'b']);
   assert.deepEqual(sortRecords(rows, { key: 'due', dir: 'desc' }).map(row => row.id), ['c', 'a', 'b']);
-  assert.deepEqual(nextSort({ key: 'due', dir: 'asc' }, 'due'), { key: 'due', dir: 'desc' });
-  assert.deepEqual(nextSort({ key: 'due', dir: 'asc' }, 'created'), { key: 'created', dir: 'desc' });
+  assert.deepEqual(nextSort([{ key: 'due', dir: 'asc' }], 'due'), [{ key: 'due', dir: 'desc' }]);
+  assert.deepEqual(nextSort([], 'created'), [{ key: 'created', dir: 'desc' }]);
+});
+
+test('多列按点击顺序比较，同值才比较下一级，反转日期不打散优先级', () => {
+  const items = [
+    { id: 'later', priority: 'P0', due: '2026-11-20' },
+    { id: 'other', priority: 'P1', due: '2026-11-01' },
+    { id: 'early', priority: 'P0', due: '2026-11-10', created_at: '2026-11-02 10:00' },
+    { id: 'missing', priority: 'P0' },
+    { id: 'same', priority: 'P0', due: '2026-11-10', created_at: '2026-11-03 10:00' },
+    { id: 'done', priority: 'P0', due: '2026-11-01', status: '已完成' },
+  ];
+  const priorityThenDate = nextSort(nextSort([], 'priority'), 'due');
+  assert.deepEqual(sortRecords(items, priorityThenDate).map(row => row.id), ['early', 'same', 'later', 'missing', 'other', 'done']);
+  const withThirdColumn = nextSort(priorityThenDate, 'created');
+  assert.deepEqual(sortRecords(items, withThirdColumn).map(row => row.id), ['same', 'early', 'later', 'missing', 'other', 'done']);
+  const reversedDate = nextSort(withThirdColumn, 'due');
+  assert.deepEqual(sortRecords(items, reversedDate).map(row => row.id), ['later', 'same', 'early', 'missing', 'other', 'done']);
+  assert.equal(reversedDate.length, 3);
 });
 
 test('已结束默认沉底，关掉后回到表头排序', () => {

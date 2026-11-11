@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, SlidersHorizontal, Info, Plus, RefreshCw, Save, X } from 'lucide-react';
-import { blankForm, categoryOf, taskCategories, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
+import { blankForm, categoryOf, taskCategories, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, defaultLedgerSort, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
 import './ledger.css';
 
@@ -85,8 +85,16 @@ function Pill({ tone, mode, onClick, children }) {
 }
 
 function SortHeader({ column, label, sort, onSort }) {
-  const active = sort?.key === column;
-  return <button type="button" className={active ? 'is-sorted' : ''} onClick={() => onSort(column)}>{label}{active && (sort.dir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />)}</button>;
+  const index = sort.findIndex(rule => rule.key === column);
+  const rule = sort[index];
+  const name = rule ? `${label}，第 ${index + 1} 排序，${rule.dir === 'asc' ? '升序' : '降序'}` : label;
+  return <button type="button" className={rule ? 'is-sorted' : ''} aria-label={name} title={name} onClick={() => onSort(column)}>
+    <span className="ledger-sort-label">{label}</span>
+    {rule && <span className="ledger-sort-mark" aria-hidden="true">
+      {sort.length > 1 && <span>{index + 1}</span>}
+      {rule.dir === 'asc' ? <ArrowUp size={11}/> : <ArrowDown size={11}/>}
+    </span>}
+  </button>;
 }
 
 function ColumnResize({ label, value, minimum, maximum, fallback, onChange }) {
@@ -113,6 +121,31 @@ const rowIndexWidth = 40;
 
 function savedValue(key) {
   try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+}
+
+function SortSettings({ rules, onChange }) {
+  return <section className="ledger-sort-settings" aria-label="排序设置">
+    <div className="ledger-sort-settings-head">
+      <h3>排序</h3>
+      {rules.length > 0 && <button type="button" onClick={() => onChange([])}>恢复默认排序</button>}
+    </div>
+    {rules.length ? <ol>{rules.map((rule, index) => {
+      const label = columnLabels[rule.key];
+      const ascending = rule.dir === 'asc';
+      return <li key={rule.key}>
+        <span className="ledger-sort-position">{index + 1}</span>
+        <span className="ledger-sort-field">{label}</span>
+        <button type="button" aria-label={`将${label}切换为${ascending ? '降序' : '升序'}`}
+          onClick={() => onChange(nextSort(rules, rule.key))}>{ascending ? '升序' : '降序'}</button>
+        <button type="button" aria-label={`上移${label}排序`} disabled={index === 0}
+          onClick={() => onChange(moveItem(rules, rule, rules[index - 1]))}><ArrowUp size={13}/></button>
+        <button type="button" aria-label={`下移${label}排序`} disabled={index === rules.length - 1}
+          onClick={() => onChange(moveItem(rules, rule, rules[index + 1], true))}><ArrowDown size={13}/></button>
+        <button type="button" aria-label={`移除${label}排序`}
+          onClick={() => onChange(rules.filter(item => item.key !== rule.key))}><X size={13}/></button>
+      </li>;
+    })}</ol> : <p>截止时间升序</p>}
+  </section>;
 }
 
 function ColumnLayout({ columns, visibleColumns, hidden, widths, onWidth, onFit, onMove, onReset, onToggle }) {
@@ -153,7 +186,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setFilters({ ...emptyFilters(), overdue: overdueMode });
   }, [recordId]);
   useEffect(() => { setFilters(current => ({ ...current, overdue: overdueMode })); }, [overdueMode]);
-  const [sort, setSort] = useState({ key: 'due', dir: 'asc' });
+  const [sort, setSort] = useState([]);
   const [widths, setWidths] = useState(() => columnWidths(savedValue('ai-hub-ledger-columns')));
   const [widthMode, setWidthMode] = useState(() => savedValue('ai-hub-ledger-width-mode') === 'manual' ? 'manual' : 'fill');
   const [columnOrder, setColumnOrder] = useState(() => columnSequence(savedValue('ai-hub-ledger-column-order')));
@@ -329,7 +362,11 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   }
   function sortByColumn(key) {
     if (manualOrder) saveOrder(manualIds, false);
-    setSort(current => nextSort(manualOrder ? {} : current, key));
+    setSort(current => {
+      if (manualOrder) return nextSort([], key);
+      const rules = !current.length && key === defaultLedgerSort[0].key ? defaultLedgerSort : current;
+      return nextSort(rules, key);
+    });
   }
   function moveColumn(from, to, after) {
     if (widthMode === 'manual') setWidths(columnWidths({ ...widths, ...fittedWidths }));
@@ -420,7 +457,9 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const savedOrder = order[kind];
   const manualIds = Array.isArray(savedOrder) ? savedOrder : Array.isArray(savedOrder?.ids) ? savedOrder.ids : [];
   const manualOrder = allowReorder && manualIds.length > 0 && savedOrder?.manual !== false;
-  const sorted = manualOrder ? orderedRows(rows, manualIds, sinkDone) : sortRecords(rows, sort, sinkDone);
+  const activeSort = manualOrder ? [] : sort.length ? sort : defaultLedgerSort;
+  const primarySort = activeSort[0];
+  const sorted = manualOrder ? orderedRows(rows, manualIds, sinkDone) : sortRecords(rows, activeSort, sinkDone);
   const scopedRows = recordId ? sorted.filter(row => row.id === recordId) : sorted;
   const visible = filterRecords(scopedRows, filters, day);
   const selectionKey = row => (row.kind || kind) + ':' + row.id;
@@ -563,6 +602,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
           <h3>显示方式</h3><div className="ledger-tabs" role="group" aria-label="视图"><button type="button" aria-pressed={view === 'list'} className={view === 'list' ? 'selected' : ''} onClick={() => { chooseView('list'); close(); }}>列表</button><button type="button" aria-pressed={view === 'board'} className={view === 'board' ? 'selected' : ''} onClick={() => { chooseView('board'); close(); }}>看板</button></div>
           <h3>列宽</h3><div className="ledger-tabs" role="group" aria-label="表格宽度模式"><button type="button" aria-pressed={widthMode === 'fill'} className={widthMode === 'fill' ? 'selected' : ''} onClick={() => setWidthMode('fill')}>适应窗口</button><button type="button" aria-pressed={widthMode === 'manual'} className={widthMode === 'manual' ? 'selected' : ''} onClick={() => setWidthMode('manual')}>手动列宽</button></div>
           {allowReorder && <label className="ledger-manual-toggle"><input type="checkbox" checked={manualOrder} onChange={() => saveOrder(manualIds.length ? manualIds : sorted.map(row => row.id), !manualOrder)}/>手动调整行序</label>}
+          {!manualOrder && view === 'list' && <SortSettings rules={sort} onChange={setSort}/>}
           <ColumnLayout widths={{ ...widths, ...fittedWidths }} hidden={hiddenColumns} visibleColumns={columns} onToggle={key => setHiddenColumns(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])} onWidth={resizeColumn} onFit={() => setWidthMode('fill')} columns={columnOrder.filter(key => (key !== 'category' || showCategoryColumn) && (key !== 'tags' || showTagColumn))} onMove={moveColumn} onReset={resetColumns}/>
         </div>}</LedgerMenu>
       </div>
@@ -588,7 +628,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         <thead><tr>
           <th scope="col" className="ledger-index" aria-label="批量选择"><div className="ledger-index-content"><input type="checkbox" aria-label="选择当前显示的记录" checked={everySelected} ref={element => { if (element) element.indeterminate = selectedRows.length > 0 && !everySelected; }} onChange={selectAll}/></div></th>
           {columns.map(key => <th key={key} scope="col" data-column={key}
-            aria-sort={!manualOrder && sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+            aria-sort={primarySort?.key === key ? (primarySort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
             className={columnTarget?.key === key ? (columnTarget.after ? 'drop-after' : 'drop-before') : undefined}
             onDragOver={event => {
               const target = columnDrop(event, key);
@@ -605,7 +645,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
               <span className="ledger-column-grip" draggable aria-hidden="true" title="拖动调整列顺序"
                 onDragStart={event => { columnDrag.current = key; event.dataTransfer.setData('text/plain', key); event.dataTransfer.effectAllowed = 'move'; }}
                 onDragEnd={() => { columnDrag.current = null; setColumnTarget(null); }}><GripVertical size={13}/></span>
-              {sortableColumns.includes(key) ? <SortHeader column={key} label={columnLabels[key]} sort={manualOrder ? null : sort} onSort={sortByColumn} /> : <span>{columnLabels[key]}</span>}
+              {sortableColumns.includes(key) ? <SortHeader column={key} label={columnLabels[key]} sort={activeSort} onSort={sortByColumn} /> : <span>{columnLabels[key]}</span>}
             </div>
             {key === columns.at(-1) ? <span className="ledger-auto-width" title="末列自动填充剩余空间">自动</span> : <ColumnResize label={columnLabels[key]} value={fittedWidths[key]} minimum={ledgerColumnLimits[key][0]} maximum={ledgerColumnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => resizeColumn(key, value)} />}
           </th>)}

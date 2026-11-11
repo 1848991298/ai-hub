@@ -78,6 +78,8 @@ export function filterRecords(rows, filters, today) {
 
 const priorityRank = { P0: 0, P1: 1, P2: 2 };
 const statusRank = { '未启动': 0, '开发中': 1, '测试中': 2, '已完成': 3 };
+const categoryRank = { '需求': 0, '优化': 1, '问题': 2 };
+export const defaultLedgerSort = [{ key: 'due', dir: 'asc' }];
 
 function compareKnown(rank, left, right, dir) {
   const a = rank[left];
@@ -95,26 +97,34 @@ function compareDate(left, right, dir) {
   return dir === 'desc' ? right.localeCompare(left) : left.localeCompare(right);
 }
 
+function compareColumn(a, b, { key, dir }) {
+  if (key === 'created') return compareDate(a.created_at, b.created_at, dir);
+  if (key === 'priority') return compareKnown(priorityRank, a.priority, b.priority, dir);
+  if (key === 'category') return compareKnown(categoryRank, categoryOf(a), categoryOf(b), dir);
+  if (key === 'status') return compareKnown(statusRank, canonicalStatus(a.status), canonicalStatus(b.status), dir);
+  return compareDate(a.due, b.due, dir);
+}
+
 export function sortRecords(rows, sort, sinkDone = true) {
-  const key = sort?.key || 'due';
-  const dir = sort?.dir === 'desc' ? 'desc' : 'asc';
+  const selected = Array.isArray(sort) ? sort : sort ? [sort] : [];
+  const rules = selected.length ? selected : defaultLedgerSort;
   return [...rows].sort((a, b) => {
     if (sinkDone && isDone(a) !== isDone(b)) return isDone(a) ? 1 : -1;
-    let difference = 0;
-    if (key === 'created') difference = compareDate(a.created_at, b.created_at, dir);
-    else if (key === 'priority') difference = compareKnown(priorityRank, a.priority, b.priority, dir);
-    else if (key === 'category') difference = compareKnown({ '需求': 0, '优化': 1, '问题': 2 }, categoryOf(a), categoryOf(b), dir);
-    else if (key === 'status') difference = compareKnown(statusRank, canonicalStatus(a.status), canonicalStatus(b.status), dir);
-    else difference = compareDate(a.due, b.due, dir);
-    if (difference) return difference;
+    for (const rule of rules) {
+      const difference = compareColumn(a, b, rule);
+      if (difference) return difference;
+    }
     return (a.created_at || '').localeCompare(b.created_at || '') || (a.id || '').localeCompare(b.id || '');
   });
 }
 
 export function nextSort(current, key) {
-  const initial = { created: 'desc', priority: 'asc', status: 'asc', due: 'asc' };
-  if (current.key !== key) return { key, dir: initial[key] || 'asc' };
-  return { key, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+  if (!current.some(rule => rule.key === key)) {
+    return [...current, { key, dir: key === 'created' ? 'desc' : 'asc' }];
+  }
+  return current.map(rule => rule.key === key
+    ? { key, dir: rule.dir === 'asc' ? 'desc' : 'asc' }
+    : rule);
 }
 
 export function changedFields(base, values) {
@@ -155,7 +165,7 @@ export function knownTags(data) {
   return mergeTags(found);
 }
 
-export const ledgerColumnDefaults = { content: 300, category: 72, status: 84, due: 112, priority: 64, tags: 96, created: 124, note: 156 };
+export const ledgerColumnDefaults = { content: 300, category: 72, status: 84, due: 112, priority: 84, tags: 96, created: 124, note: 156 };
 export const ledgerColumnLimits = { content: [64, 1600], category: [48, 400], tags: [44, 800], status: [44, 400], created: [48, 600], due: [48, 600], priority: [44, 400], note: [48, 1600] };
 export const ledgerColumnOrder = Object.keys(ledgerColumnDefaults);
 
