@@ -85,3 +85,70 @@
 .market-board-col.is-zero .market-trend-stack { background: var(--accent); opacity: .7; }
 .market-board-col.is-missing b { color: var(--muted); }
 .market-drill { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+.market-audit {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--warning-bg, #fff1d9);
+  color: var(--warning, #966315);
+  font-size: 13px;
+}
+.market-audit-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+  margin: 0 0 3px;
+}
+.market .market-audit-trigger {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.market-audit-dialog {
+  width: min(680px, calc(100% - 36px));
+  max-height: calc(100dvh - 48px);
+  padding: 20px 24px;
+  border: 1px solid var(--mo-border);
+  border-radius: 14px;
+  background: var(--mo-card);
+  color: var(--mo-text);
+  box-shadow: 0 24px 60px #0003;
+}
+.market-audit-dialog::backdrop { background: #141e2b6b; }
+.market-audit-dialog header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.market-audit-dialog h2 { margin: 0; font-size: 20px; }
+.market-audit-dialog header p { margin: 4px 0 0; color: var(--mo-muted); font-size: 14px; }
+.market-audit-body {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--mo-border);
+  font-size: 15px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.market-sync-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin: 10px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--mo-border);
+  list-style: none;
+  color: var(--mo-muted);
+  font-size: 13px;
+}
+.market-sync-parts li { display: inline-flex; gap: 5px; align-items: baseline; }
+.market-sync-parts [data-state="ok"] { color: var(--success, #25794e); }
+.market-sync-parts [data-state="read_failed"],
+.market-sync-parts [data-state="needs_login"],
+.market-sync-parts [data-state="access_denied"] { color: var(--warning, #966315); }

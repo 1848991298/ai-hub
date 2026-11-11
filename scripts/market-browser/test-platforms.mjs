@@ -32,9 +32,106 @@ test('零成功分项不能标记部分同步，登录失败给出重登录状�
  failed.parts.channels={state:'needs_login'};assert.equal(finish(failed).state,'needs_login');
  failed.parts.channels={state:'ok'};assert.equal(finish(failed).state,'partial');
 });
+test('未接入的分项不降低已读分项的同步结果',()=>{
+ const value=result('tencent');
+ value.parts={channels:{state:'ok'},downloads:{state:'ok'},audit:{state:'unsupported'},reviews:{state:'unsupported'}};
+ assert.equal(finish(value).state,'ready');
+ value.parts.downloads={state:'read_failed'};
+ assert.equal(finish(value).state,'partial');
+ value.parts={reviews:{state:'unsupported'}};
+ assert.equal(finish(value).state,'read_failed');
+});
 
 test('小米定时上架属于待发布，新版不能冒充当前线上版本',()=>{
  const d={packageName:'com.jryx.isho',appId:'123',onlineVersionSelling:true,onlineVersion:{appDetailsInfo:{summary:'已上架',versionName:'3.2',versionCode:312}},releaseNewVersion:{appDetailsInfo:{summary:'审核通过，定时上架',versionName:'3.3',versionCode:313}}};
  const v=xiaomiChannel(d,'123');assert.equal(v.status,'approved');assert.equal(v.live_version,'3.2');assert.equal(v.live_code,312);assert.equal(v.pending_version,'3.3');assert.equal(v.pending_code,313);assert.equal(v.reason,'审核通过，定时上架');
  assert.throws(()=>xiaomiChannel({...d,releaseNewVersion:{appDetailsInfo:{...d.releaseNewVersion.appDetailsInfo,summary:'fixture-unknown'}}},'123'),/unknown_status/);
+});
+
+test('小米人工审核中保留官方状态，区分构建号相同的线上与提审版本',()=>{
+ const data={
+  packageName:'com.jryx.isho',appId:'123',onlineVersionSelling:true,
+  onlineVersion:{appDetailsInfo:{summary:'已上架',versionName:'3.2',versionCode:312}},
+  releaseNewVersion:{appDetailsInfo:{summary:'人工审核中',versionName:'3.3',versionCode:312}},
+ };
+ const row=xiaomiChannel(data,'123');
+ assert.equal(row.status,'reviewing');
+ assert.equal(row.reason,'人工审核中');
+ assert.equal(row.live_version,'3.2');
+ assert.equal(row.pending_version,'3.3');
+});
+
+function honorContext(detailOverrides={}){
+ const origin='https://developer.honor.com';
+ const packageName='com.jryx.isho';
+ const releaseId='1234567890123456789';
+ const detailPath='/managecenter/opencards/app/openplatformApi/application/release/detail';
+ const app={
+  packageName,appId:'fixture-app',
+  statusList:[
+   {status:'231',versionName:'3.2',versionCode:311,createTime:'2026-01-01'},
+   {status:'232',versionName:'3.3',versionCode:312,appReleaseId:releaseId,createTime:'2026-01-02'},
+  ],
+ };
+ let observer,currentUrl=origin;
+ const context={on:(_,fn)=>{observer=fn;},off:()=>{observer=null;}};
+ const response=(path,value,request={})=>({
+  url:()=>origin+path,request:()=>({method:()=>'POST',postDataJSON:()=>request,postData:()=>JSON.stringify(request)}),
+  json:async()=>value,status:()=>200,ok:()=>true,
+ });
+ const detail={apkInfo:{packageName},releaseStatus:232,versionName:'3.3',versionCode:312,
+  reviewComment:['请补充说明。\n参照 https://example.com/help?token=fixture-private'],...detailOverrides};
+ const frame={
+  url:()=>origin+'/managecenter/opencards/app/?t=fixture#/AppList?__lang=zh',
+  goto:async url=>assert.equal(new URL(url).hash,'#/openplatform/appShelves/versionInformation?appReleaseId='+releaseId),
+  evaluate:async(_,comments)=>comments.join('\n\n'),
+ };
+ const page={
+  url:()=>currentUrl,frames:()=>[frame],
+  async waitForResponse(predicate){
+   assert.equal(predicate(response(detailPath,{},{appReleaseInfoId:'1'})),false);
+   const matching=response(detailPath,{code:'0000',data:detail},{appReleaseInfoId:releaseId});
+   assert.equal(predicate(matching),true);
+   return matching;
+  },
+  async goto(url){
+   currentUrl=url;
+   if(url.endsWith('E00006')){
+    await observer(response('/application/manage/v3/list',{code:'0000',data:{list:[app]}}));
+   }else{
+    await observer(response('/reportPortal/v2/queryFilterData',{data:[{key:packageName,appId:app.appId}]},{filterType:'androidapp-pkgname'}));
+    await observer(response('/reportPortal/v2/queryComponentData',{
+     data:{reportTableVo:{headList:[{key:'new_download',label:'新下载成功次数'}],values:[{date:'2026-01-02',new_download:7}]}},
+    },{filters:[
+     {fieldName:'app_pkg_name',fieldValue:packageName},
+     {fieldName:'date',expression:'gte',fieldValue:'2026-01-01'},
+     {fieldName:'date',expression:'lte',fieldValue:'2026-01-02'},
+    ]}));
+   }
+  },
+ };
+ return {page,context};
+}
+
+test('荣耀绑定驳回详情到本次提审，保留线上版本和下载',async()=>{
+ const data=await honor(honorContext());
+ const [row]=data.rows.channels;
+ assert.equal(row.status,'rejected');
+ assert.equal(row.live_version,'3.2');
+ assert.equal(row.pending_version,'3.3');
+ assert.equal(row.reason,'请补充说明。\n参照 https://example.com/help');
+ assert.equal(data.rows.metrics[0].downloads,7);
+ assert.deepEqual(data.parts.audit,{state:'ok'});
+ assert.equal(data.state,'ready');
+});
+
+test('荣耀详情版本或包名不符时保留已验证的驳回状态并标记详情失败',async()=>{
+ for(const mismatched of [{versionName:'3.2'},{versionCode:311},{apkInfo:{packageName:'other'}}]){
+  const data=await honor(honorContext(mismatched));
+  assert.equal(data.rows.channels[0].status,'rejected');
+  assert.equal(data.rows.channels[0].reason,'');
+  assert.equal(data.rows.metrics[0].downloads,7);
+  assert.deepEqual(data.parts.audit,{state:'read_failed'});
+  assert.equal(data.state,'partial');
+ }
 });

@@ -4,9 +4,10 @@ export function channel(d,expectedId){
  if(d.packageName!==PACKAGE||String(d.appId)!==String(expectedId))throw new Error('app_mismatch');
  const online=d.onlineVersion?.appDetailsInfo,update=d.releaseNewVersion?.appDetailsInfo;
  const live=online?.summary==='已上架'&&d.onlineVersionSelling===true;
- const labels={'未发布':'not_submitted','审核中':'reviewing','审核未通过':'rejected','审核不通过':'rejected','待发布':'approved','审核通过，定时上架':'approved','已上架':'live','已下架':'offline'};
+ const labels={'未发布':'not_submitted','审核中':'reviewing','人工审核中':'reviewing','审核未通过':'rejected','审核不通过':'rejected','待发布':'approved','审核通过，定时上架':'approved','已上架':'live','已下架':'offline'};
  const status=update?labels[update.summary]:live?'live':'offline';if(!status)throw new Error('unknown_status');
- return {channel:'xiaomi',live_version:live?version(online.versionName):'',live_code:live?count(online.versionCode):null,pending_version:update?version(update.versionName):'',pending_code:update?.versionCode?count(update.versionCode):null,status,as_of:today(),reason:update?.summary==='审核通过，定时上架'?update.summary:''};
+ const reason=['人工审核中','审核通过，定时上架'].includes(update?.summary)?update.summary:'';
+ return {channel:'xiaomi',live_version:live?version(online.versionName):'',live_code:live?count(online.versionCode):null,pending_version:update?version(update.versionName):'',pending_code:update?.versionCode?count(update.versionCode):null,status,as_of:today(),reason};
 }
 // 只复用已通过包名校验的官方控制台请求中的两项同源认证参数；不持久化或输出。
 export async function query(page,auth,path,params={},report=false){

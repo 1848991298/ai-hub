@@ -56,6 +56,7 @@ export async function collect({page}){
   });
   out.parts.downloads={state:'ok',count:rows.length,from,to};
  }catch(e){out.rows.metrics=[];out.parts.downloads=failure(e);}
+ out.parts.audit={state:'unsupported'};
  out.parts.reviews={state:'unsupported'};
  return finish(out);
 }
