@@ -8,6 +8,7 @@ from http.server import SimpleHTTPRequestHandler,ThreadingHTTPServer
 import json
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import Request,build_opener,HTTPRedirectHandler
@@ -20,13 +21,17 @@ class NoRedirect(HTTPRedirectHandler):
 class MarketBridge:
  def __init__(self,root):
   self.root=Path(root);self.local=None;self.collector=None
+  self.local_lock=threading.Lock()
+ def local_collectors(self):
+  with self.local_lock:
+   if self.collector is None:
+    from market_collect import MarketCollectors
+    self.local=MarketService(self.root/'.local/market.sqlite')
+    self.collector=MarketCollectors(self.root,self.local)
+   return self.collector
  def start_collecting(self):
   if not (self.root/'.local/market-collector.json').exists() or self.remote():return
-  if self.local is None:self.local=MarketService(self.root/'.local/market.sqlite')
-  if self.collector is None:
-   from market_collect import MarketCollectors
-   self.collector=MarketCollectors(self.root,self.local)
-  self.collector.start_scheduler()
+  self.local_collectors().start_scheduler()
  def remote(self):
   path=self.root/'.local/market-remote.json'
   if not path.exists(): return None
@@ -58,15 +63,16 @@ class MarketBridge:
    snapshot=value if action=='snapshot' else value.get('snapshot')
    if isinstance(snapshot,dict): snapshot['connection']={'mode':'remote','label':'运营服务器 · 与独立网页共用'}
    return value
-  if self.local is None:self.local=MarketService(self.root/'.local/market.sqlite')
-  if self.collector is None:
-   from market_collect import MarketCollectors
-   self.collector=MarketCollectors(self.root,self.local)
-  self.collector.start_scheduler()
-  if action=='collect':return self.collector.control(body)
-  value=self.local.snapshot() if action=='snapshot' else self.local.dispatch(action,body)
-  snapshot=value if action=='snapshot' else value.get('snapshot')
-  if snapshot is not None:snapshot['collection']=self.collector.snapshot()
+  collector=self.local_collectors()
+  collector.start_scheduler()
+  if action=='collect':return collector.control(body)
+  if action=='snapshot':
+   # 先取得采集结果，再读库。批次完成时响应一定包含刚写入的数据。
+   collection=collector.snapshot()
+   return {**self.local.snapshot(),'collection':collection}
+  value=self.local.dispatch(action,body)
+  snapshot=value.get('snapshot')
+  if snapshot is not None:snapshot['collection']=collector.snapshot()
   return value
 
 def handle_market(handler, service, post=False, actor='local'):

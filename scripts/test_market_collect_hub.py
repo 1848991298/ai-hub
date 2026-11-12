@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 import tempfile
+import threading
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from market_hub import MarketService,MarketError
@@ -107,4 +110,36 @@ class CollectorTests(unittest.TestCase):
    import fcntl
    with open(self.root/'.local/market-collector.lock','a') as lock:
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);self.assertFalse(self.collector.start())
+ def test_bulk_sync_joins_active_attempt_and_reports_this_run(self):
+  manager=MarketCollectors(self.root,self.service)
+  release=threading.Event()
+  launched=[]
+  states={'oppo':'ready','vivo':'partial','xiaomi':'ready','honor':'read_failed','tencent':'needs_login'}
+  def collect(command, **kwargs):
+   provider='oppo' if Path(command[1]).name=='oppo.mjs' else command[2]
+   launched.append(provider)
+   if provider=='oppo':release.wait(3)
+   state=states[provider]
+   parts={'downloads':{'state':'ok'}}
+   if state=='partial':parts['reviews']={'state':'read_failed'}
+   payload={'provider':provider,'package':'com.jryx.isho','app_id':'37892440','state':state,'parts':parts,
+            'rows':{'channels':[],'metrics':[],'reviews':[]}}
+   return SimpleNamespace(returncode=0,stdout=json.dumps(payload))
+  with patch('market_collect.shutil.which',return_value='/test/node'), patch('market_collect.subprocess.run',side_effect=collect):
+   self.assertTrue(manager.items['oppo'].start())
+   first=manager.control({'operation':'sync_all'})
+   second=manager.control({'operation':'sync_all'})
+   self.assertTrue(first['started'])
+   self.assertFalse(second['started'])
+   self.assertEqual(first['batch']['id'],second['batch']['id'])
+   with self.assertRaises(MarketError):manager.control({'operation':'sync_all','provider':'vivo'})
+   release.set()
+   deadline=time.monotonic()+3
+   while manager.snapshot()['batch']['state']=='running' and time.monotonic()<deadline:
+    time.sleep(.01)
+   result=manager.snapshot()['batch']
+  self.assertEqual(result['state'],'finished')
+  self.assertEqual({provider:row['state'] for provider,row in result['results'].items()},states)
+  self.assertCountEqual(launched,states.keys())
+  self.assertEqual(result['results']['vivo']['parts']['reviews']['state'],'read_failed')
 if __name__=='__main__':unittest.main()

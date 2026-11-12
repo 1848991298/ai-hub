@@ -78,7 +78,7 @@ class OperationsBridge(MarketBridge):
             value = {'mode': body['mode'], 'remote': remote}
             if value == old:
                 return self.public_config()
-            if self.collector and any(c.active() for c in self.collector.items.values()):
+            if self.collector and (self.collector.batch_active() or any(c.active() for c in self.collector.items.values())):
                 raise MarketError('仍有商店采集或登录任务运行，请完成或关闭登录窗口后再切换。', 409)
             if self.collector:
                 for collector in self.collector.items.values():

@@ -1,5 +1,5 @@
 import React, {useEffect,useRef,useState} from 'react';
-import {ArrowDownToLine,ArrowUpRight,Check,Download,Expand,FileUp,GripVertical,RefreshCw,Save,Star,X,Database} from 'lucide-react';
+import {ArrowDownToLine,ArrowUpRight,Check,ChevronDown,Download,Expand,FileUp,GripVertical,RefreshCw,Save,Star,X,Database} from 'lucide-react';
 import {applyOrder,moveItem} from './market-order.js';
 import {shiftDate, storeAlerts} from './market-board.js';
 import MarketDashboard from './MarketDashboard.jsx';
@@ -38,6 +38,51 @@ function partStatus(part) {
  if (part.state === 'ok') return part.count == null ? '已读' : `已读 ${number(part.count)} 条`;
  if (part.code === 'unknown_status') return '平台状态待适配';
  return partStates[part.state] || '待核实';
+}
+function batchResult(state) {
+ if (state === 'running') return ['running','采集中'];
+ if (state === 'ready') return ['ready','成功'];
+ if (state === 'partial') return ['partial','部分同步'];
+ if (state === 'needs_login' || state === 'auth_restore_failed') return ['login','需登录'];
+ return ['failed','失败'];
+}
+function MarketBatch({batch, stores, orderedIds, providers, open, setOpen, onChannel, onRetry}) {
+ const results = Object.values(batch.results);
+ const finished = results.filter(result => result.state !== 'running').length;
+ const counts = results.reduce((totals, result) => {
+   const [key] = batchResult(result.state);
+   totals[key] = (totals[key] || 0) + 1;
+   return totals;
+ }, {});
+ const summary = batch.state === 'running'
+   ? `正在采集 · ${finished}/${results.length} 已完成`
+   : [['ready','成功'],['partial','部分同步'],['failed','失败'],['login','需登录']]
+     .filter(([key]) => counts[key]).map(([key,label]) => `${counts[key]} ${label}`).join(' · ');
+ return <section className="market-batch" aria-label="渠道同步结果">
+   <header>
+     <div role="status"><strong>本次同步</strong><span>{summary}</span></div>
+     <button type="button" aria-expanded={open} aria-controls="market-batch-results" onClick={() => setOpen(!open)}>
+       {open ? '收起结果' : '查看结果'} <ChevronDown size={14}/>
+     </button>
+   </header>
+   {open && <ul id="market-batch-results">
+     {orderedIds.map(id => {
+       const result = batch.results[id];
+       if (!result) return null;
+       const [tone, label] = batchResult(result.state);
+       const issues = Object.entries(result.parts || {}).filter(([, part]) => part.state !== 'ok' && part.state !== 'unsupported');
+       return <li key={id}>
+         <div className="market-batch-channel"><strong>{stores[id]}</strong><span data-result={tone}>{label}</span></div>
+         {tone === 'ready' ? <small>{result.changed ? `更新 ${result.changed} 条记录` : '已核对，无新数据'}</small>
+           : tone !== 'running' && <small>{issues.length
+             ? issues.map(([key, part]) => `${partLabel(key, id)} ${partStatus(part)}`).join(' · ')
+             : result.reason}</small>}
+         {tone === 'login' && <button type="button" onClick={() => onChannel(id)}>前往登录</button>}
+         {(tone === 'failed' || tone === 'partial') && <button type="button" disabled={providers[id]?.state === 'running'} onClick={() => onRetry(id)}>重试{stores[id]}</button>}
+       </li>;
+     })}
+   </ul>}
+ </section>;
 }
 function ChannelAudit({row, audit, store}) {
  const dialog = useRef(null);
@@ -81,6 +126,8 @@ export default function MarketPage({standalone=false, route, navigate}){
  const [screen,setScreen]=useState(()=>new URLSearchParams(location.search).get('display')==='1');
  const [storeOrder,setStoreOrder]=useState(()=>{try{return JSON.parse(localStorage.getItem('ai-hub-market-order'))||[];}catch{return [];}});
  const [dropStore,setDropStore]=useState(null);
+ const [startingAll, setStartingAll] = useState(false);
+ const [batchOpen, setBatchOpen] = useState(false);
  const mounted=useRef(true),fileInput=useRef();
  const snapshotReads=useRef({started:0,applied:0,manual:false});
  async function refresh(report=false) {
@@ -170,7 +217,11 @@ export default function MarketPage({standalone=false, route, navigate}){
  const readonly = !!data?.read_only;
  const refreshLabel = data?.connection.mode === 'local' ? '刷新本机记录' : '刷新记录';
  const providers = data?.collection?.providers || { oppo: data?.collection || {} };
- const collecting = Object.values(providers).some(item => item.state === 'running');
+ const batch = data?.collection?.batch;
+ const batchRunning = batch?.state === 'running';
+ const batchFinished = batch ? Object.values(batch.results).filter(result => result.state !== 'running').length : 0;
+ const canCollect = !readonly && data?.connection.mode === 'local';
+ const collecting = batchRunning || Object.values(providers).some(item => item.state === 'running');
  const problems = orderedIds.filter(id => Object.hasOwn(storeAlerts, providers[id]?.state));
  const alertFocus = tab === 'channels' && view.alert === '1';
  const ready = !!data;
@@ -181,6 +232,23 @@ export default function MarketPage({standalone=false, route, navigate}){
    card?.focus({ preventScroll: true });
  }, [ready, alertFocus, channel]);
  async function collect(operation='sync',provider='oppo'){setError('');const name=stores[provider]||provider;try{const r=await api('collect',{operation,provider});setMessage(operation==='login'?`请在 ${name} 官方专用窗口完成登录；登录和数据接通状态分别核对。`:operation==='pause'?`已暂停 ${name} 定时同步`:operation==='resume'?`已启用 ${name} 每 30 分钟自动同步`:r.started?`已开始查询 ${name} 后台，完成后自动更新页面`:'该平台已有任务在运行');await refresh();}catch(e){setError(e.message);}}
+ async function syncAll() {
+   setStartingAll(true);
+   setMessage('');
+   setError('');
+   try {
+     await api('collect', {operation:'sync_all'});
+     setBatchOpen(true);
+     await refresh();
+   } catch (error) {
+     setError(error.message);
+   } finally {
+     setStartingAll(false);
+   }
+ }
+ function showStoreConnection(id) {
+   go({tab:'channels', channel:id, alert:'1', date:''});
+ }
  useEffect(()=>{if(!collecting)return;const timer=setInterval(refresh,3000);return()=>clearInterval(timer);},[collecting]);
  return <section className={`market ${tab==='board'?'market-board-view':''} ${screen?'market-screen':''} ${standalone?'market-standalone':''}`}>
   <header className="market-head">
@@ -191,10 +259,15 @@ export default function MarketPage({standalone=false, route, navigate}){
      <RefreshCw size={15}/>{refreshing ? '刷新中…' : refreshLabel}
     </button>
     <button onClick={toggleScreen}><Expand size={15}/>{screen?'退出大屏':'大屏模式'}</button>
-    {!screen&&!readonly&&<button className="market-primary" onClick={beginImport}><FileUp size={15}/>导入报表</button>}
+    {!screen&&!readonly&&<button className={canCollect ? '' : 'market-primary'} onClick={beginImport}><FileUp size={15}/>导入报表</button>}
+    {canCollect && <button type="button" className="market-primary" onClick={syncAll} disabled={startingAll || batchRunning} aria-busy={startingAll || batchRunning}>
+      <RefreshCw size={15}/>{batchRunning ? `同步中 ${batchFinished}/${Object.keys(batch.results).length}` : startingAll ? '正在启动…' : '同步全部渠道'}
+    </button>}
    </div>
   </header>
   {error&&<div className="market-alert" role="alert">{error}</div>}{message&&<div className="market-success" role="status"><Check size={15}/>{message}</div>}
+  {canCollect && batch && <MarketBatch batch={batch} stores={stores} orderedIds={orderedIds} providers={providers} open={batchOpen} setOpen={setBatchOpen}
+    onChannel={showStoreConnection} onRetry={id => {showStoreConnection(id);collect('sync',id);}}/>}
   {!!problems.length && <div className="market-alert market-alert-links" role="status"><span>渠道需要处理</span>{problems.map(id => <button className="button" type="button" key={id} onClick={() => go({ tab: 'channels', channel: id, alert: '1', date: '' })}>{stores[id]} · {storeAlerts[providers[id].state]}<ArrowUpRight size={13}/></button>)}</div>}
   {data?<><div className="market-source"><span><Database size={14}/>{data.connection.label}{readonly?' · 只读':''}</span><span>读取于 {time(data.generated_at)} · 页面可见时每分钟重读</span></div>
   <div className="market-filters"><div className="market-tabs">{marketTabs.map(([id,label])=><button key={id} className={tab===id?'selected':''} onClick={()=>go({ tab: id, date: '', alert: '' })}>{label}</button>)}</div><div><select aria-label="渠道筛选" value={channel} onChange={e=>go({ channel: e.target.value, series: '', alert: '' })}><option value="all">全部商店</option>{orderedIds.map(id=><option key={id} value={id}>{stores[id]}</option>)}</select><select aria-label="日期范围" value={days} onChange={e=>go({ days: e.target.value, date: '', ...(e.target.value === 'custom' ? {from: shiftDate(today(),-29),to: today()} : {from:'',to:''}) })}>{[['7','近 7 天'],['30','近 30 天'],['90','近 90 天'],['all','全部历史'],['custom','自定义日期']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div></div>
@@ -223,6 +296,7 @@ function ReviewStrip({reviews,orderedIds,stores}){
 function MarketGuide({onImport,readonly}){
  return <div className="market-guide">
   <p>「刷新记录」重新读取已保存的运营数据。本机模式下，打开「上架进度」，在「商店连接」点对应渠道的同步按钮即可立即采集。</p>
+  <p>「同步全部渠道」在后台读取五家商店，按渠道反馈结果并自动更新大盘。</p>
   <p>本机服务运行时，已启用的渠道各自约每 30 分钟同步。下载量来自渠道的日报，通常采集到前一天。登录过期时可重新登录该商店。</p>
   <h3>先准备什么</h3>
   <ul><li>OPPO：首次在隔离浏览器中登录；登录态只留本机，采集器只保存运营字段，不保存账号、密钥和测试账号。</li><li>其他渠道：后续逐个平台验证登录授权与只读页面接口，再接入自动同步；CSV 保留为可选备用。</li><li>新增、活跃、留存与上传量：你们业务后台的聚合报表或只读统计接口，商店后台不能代替业务云端数据。</li></ul>
