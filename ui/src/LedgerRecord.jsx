@@ -1,4 +1,5 @@
-import React, { useId, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Image as ImageIcon, Plus, X } from 'lucide-react';
 
 export const imageTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -17,17 +18,133 @@ export async function stageImage(image) {
   }
 }
 
-export function RecordDrawer({ title, subtitle, onClose, onPaste, busy, children }) {
+export function useRecordPreview() {
+  const [preview, setPreview] = useState(null);
+  const timer = useRef(null);
+  const card = useRef(null);
+  const dismiss = useCallback(() => {
+    clearTimeout(timer.current);
+    setPreview(null);
+  }, []);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    if (!preview) return;
+    function outside(event) {
+      if (!card.current?.contains(event.target)) dismiss();
+    }
+    function escape(event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+    }
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('scroll', outside, true);
+    document.addEventListener('keydown', escape, true);
+    window.addEventListener('resize', dismiss);
+    window.addEventListener('blur', dismiss);
+    return () => {
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('scroll', outside, true);
+      document.removeEventListener('keydown', escape, true);
+      window.removeEventListener('resize', dismiss);
+      window.removeEventListener('blur', dismiss);
+    };
+  }, [preview, dismiss]);
+
+  function leave() {
+    clearTimeout(timer.current);
+    if (preview) timer.current = setTimeout(dismiss, 100);
+  }
+
+  function bind(text, label, onlyClipped = false) {
+    return {
+      onPointerEnter(event) {
+        if (event.pointerType !== 'mouse' || event.buttons || !text?.trim()) return;
+        const anchor = event.currentTarget;
+        if (onlyClipped && anchor.scrollWidth <= anchor.clientWidth) return;
+        clearTimeout(timer.current);
+        if (preview?.anchor === anchor) return;
+        setPreview(null);
+        const x = event.clientX;
+        timer.current = setTimeout(() => {
+          if (!anchor.isConnected || !anchor.matches(':hover')) return;
+          const rect = anchor.getBoundingClientRect();
+          const margin = 12;
+          const gap = 4;
+          const width = Math.min(420, window.innerWidth - margin * 2);
+          const below = window.innerHeight - rect.bottom - margin - gap;
+          const above = rect.top - margin - gap;
+          const placeAbove = below < 180 && above > below;
+          const left = Math.min(window.innerWidth - width - margin, Math.max(margin, rect.left, x - width + 24));
+          setPreview({
+            anchor, text, label, placeAbove,
+            position: {
+              left, width, '--ledger-preview-height': `${Math.min(272, placeAbove ? above : below)}px`,
+              ...(placeAbove ? { bottom: window.innerHeight - rect.top + gap } : { top: rect.bottom + gap }),
+            },
+          });
+        }, 180);
+      },
+      onPointerLeave: leave,
+    };
+  }
+
+  const popup = preview && createPortal(
+    <div ref={card} className={`ledger-text-preview${preview.placeAbove ? ' is-above' : ''}`}
+      style={preview.position} aria-hidden="true"
+      onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={leave}>
+      <div className="ledger-text-preview-content">
+        <strong>{preview.label}</strong>
+        <p>{preview.text}</p>
+      </div>
+    </div>, document.body,
+  );
+  return { bind, dismiss, popup };
+}
+
+function onBackdrop(event) {
+  if (event.target !== event.currentTarget) return false;
+  const { left, right, top, bottom } = event.currentTarget.getBoundingClientRect();
+  return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
+}
+
+function useBackdropDismiss(enabled, dismiss) {
+  const startedOutside = useRef(false);
+  return {
+    onPointerDown(event) {
+      startedOutside.current = enabled && event.isPrimary && event.button === 0 && onBackdrop(event);
+    },
+    onPointerCancel() { startedOutside.current = false; },
+    onClick(event) {
+      const shouldDismiss = enabled && startedOutside.current && onBackdrop(event);
+      startedOutside.current = false;
+      if (shouldDismiss) {
+        event.stopPropagation();
+        dismiss();
+      }
+    },
+  };
+}
+
+export function RecordDrawer({ title, subtitle, onClose, onPaste, busy, reading, initialFocus, animate, children }) {
   const dialog = useRef(null);
   const heading = useRef(null);
   const titleId = useId();
+  const backdrop = useBackdropDismiss(reading && !busy, onClose);
   useLayoutEffect(() => {
     const element = dialog.current;
     element.showModal();
-    heading.current.focus();
     return () => element.close();
   }, []);
-  return <dialog ref={dialog} className="ledger-drawer" aria-labelledby={titleId} onPaste={onPaste}
+  useLayoutEffect(() => {
+    const target = initialFocus?.current || heading.current;
+    target.focus({ preventScroll: true });
+    if (target !== heading.current) target.scrollIntoView({ block: 'start' });
+  }, [initialFocus, title]);
+  return <dialog ref={dialog} className={`ledger-drawer${reading ? ' is-reading' : ''}`} data-animated={animate || undefined}
+    aria-labelledby={titleId} onPaste={onPaste} {...backdrop}
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
     <header className="ledger-drawer-head">
       <div><h2 id={titleId} ref={heading} tabIndex={-1}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
@@ -57,12 +174,13 @@ export function RecordTextarea({ label, value, onChange, required }) {
 function ImagePreview({ image, onClose }) {
   const dialog = useRef(null);
   const [failed, setFailed] = useState(false);
+  const backdrop = useBackdropDismiss(true, onClose);
   useLayoutEffect(() => {
     const element = dialog.current;
     element.showModal();
     return () => element.close();
   }, []);
-  return <dialog ref={dialog} className="ledger-image-preview" aria-label={image.name}
+  return <dialog ref={dialog} className="ledger-image-preview" aria-label={image.name} {...backdrop}
     onCancel={event => { event.preventDefault(); event.stopPropagation(); onClose(); }}>
     <header><strong>{image.name}</strong><button type="button" className="ledger-close" aria-label="关闭图片预览" onClick={onClose}><X size={19} aria-hidden="true"/></button></header>
     {failed ? <p role="status">暂时无法预览这张截图，可在飞书中打开。</p> :

@@ -90,6 +90,37 @@
 .ledger-float-tags .is-selected{border-color:var(--accent);color:var(--text);background:var(--accent-soft,var(--blue-bg));cursor:default}
 .ledger-note{color:var(--text-secondary);line-height:1.55}
 .ledger-note-text{display:block;width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer}
+.ledger-text-preview {
+  position: fixed;
+  z-index: 29;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 28px var(--modal-shadow);
+}
+.ledger-text-preview::before {
+  position: absolute;
+  inset: auto 0 100%;
+  height: 4px;
+  content: '';
+}
+.ledger-text-preview.is-above::before { inset: 100% 0 auto; }
+.ledger-text-preview-content {
+  max-height: var(--ledger-preview-height);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.65;
+}
+.ledger-text-preview strong { color: var(--text-muted); font-size: var(--text-xs); }
+.ledger-text-preview p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: no-preference) and (any-hover: hover) {
+  .ledger-text-preview { opacity: 1; transition: opacity 125ms var(--ease); }
+  @starting-style { .ledger-text-preview { opacity: 0; } }
+}
 .ledger-time{font-variant-numeric:tabular-nums;white-space:nowrap}
 .ledger-past{color:var(--warning);font-weight:650}
 .ledger-overdue-dot{display:inline-block;width:5px;height:5px;margin-inline-start:6px;border-radius:50%;background:currentColor;vertical-align:2px}
@@ -328,23 +359,26 @@
 @media(hover:none){.ledger-content .ledger-context-trigger,.ledger-column-grip{opacity:1}}
 @media(prefers-reduced-motion:reduce){.ledger-content .ledger-context-trigger{transition:none}}
 .ledger-drawer{position:fixed;inset:0 0 0 auto;margin:0;width:min(596px,100%);height:100dvh;max-width:none;max-height:none;padding:0;border:0;border-left:1px solid var(--border);overflow:hidden;background:var(--surface);color:var(--text);box-shadow:-18px 0 52px var(--modal-shadow)}
-.ledger-drawer[open]{display:flex;flex-direction:column;animation:ledger-drawer-in .16s ease-out}
+.ledger-drawer[open]{display:flex;flex-direction:column}
 .ledger-drawer::backdrop{background:color-mix(in srgb,var(--overlay) 68%,transparent)}
+.ledger-drawer.is-reading{width:min(596px,calc(100% - 24px))}
+.ledger-drawer.is-reading::backdrop{background:color-mix(in srgb,var(--overlay) 30%,transparent)}
 @keyframes ledger-drawer-in{from{transform:translateX(12px)}to{transform:translateX(0)}}
-@media(prefers-reduced-motion:reduce){.ledger-drawer[open]{animation:none}}
+@media(prefers-reduced-motion:no-preference){.ledger-drawer[data-animated][open]{animation:ledger-drawer-in 160ms var(--ease)}}
 .ledger-drawer-head,.ledger-drawer-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;padding:16px 22px}
 .ledger-drawer-head{border-bottom:1px solid var(--border)}
 .ledger-drawer-head h2{margin:0;font-size:20px;font-weight:680}
 .ledger-drawer-head h2:focus{outline:none}
 .ledger-drawer-head p{margin:4px 0 0;color:var(--text-muted);font-size:var(--text-sm)}
 .ledger-drawer-form{display:flex;flex:1;flex-direction:column;min-height:0}
-.ledger-drawer-body{flex:1;min-height:0;overflow:auto;padding:20px 22px;overscroll-behavior:contain}
+.ledger-drawer-body{flex:1;min-height:0;overflow:auto;padding:20px 22px;scroll-padding-block:20px;overscroll-behavior:contain}
 .ledger-drawer-body .ledger-form textarea{min-height:74px;max-height:36vh}
 .ledger-drawer-footer{justify-content:flex-end;border-top:1px solid var(--border)}
 .ledger-drawer-footer .ledger-caption:first-child{margin-right:auto}
 .ledger-drawer-footer .ledger-primary{min-height:36px;padding:0 14px;border-radius:8px}
 .ledger-record-detail{display:flex;flex-direction:column;gap:24px}
 .ledger-record-detail h3,.ledger-images-head h3{margin:0 0 6px;color:var(--text-muted);font-size:var(--text-sm);font-weight:650}
+.ledger-record-detail h3[tabindex]:focus{outline:none;color:var(--accent)}
 .ledger-record-text{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);font-size:15px;line-height:1.7}
 .ledger-record-text a{color:var(--accent);text-underline-offset:3px}
 .ledger-row-image{display:inline-flex;flex:none;color:var(--text-muted)}
