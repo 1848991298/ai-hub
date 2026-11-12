@@ -77,13 +77,61 @@ export default function MarketPage({standalone=false, route, navigate}){
    const next = { ...view, ...patch };
    if (navigate) navigate(next); else setLocalRoute(next);
  }
- const [data,setData]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(false),[kind,setKind]=useState('metrics'),[modal,setModal]=useState(null),[form,setForm]=useState({}),[base,setBase]=useState(null),[saving,setSaving]=useState(false),[csv,setCsv]=useState(''),[preview,setPreview]=useState(null),[message,setMessage]=useState('');
+ const [data,setData]=useState(null),[error,setError]=useState(''),[refreshing,setRefreshing]=useState(false),[kind,setKind]=useState('metrics'),[modal,setModal]=useState(null),[form,setForm]=useState({}),[base,setBase]=useState(null),[saving,setSaving]=useState(false),[csv,setCsv]=useState(''),[preview,setPreview]=useState(null),[message,setMessage]=useState('');
  const [screen,setScreen]=useState(()=>new URLSearchParams(location.search).get('display')==='1');
  const [storeOrder,setStoreOrder]=useState(()=>{try{return JSON.parse(localStorage.getItem('ai-hub-market-order'))||[];}catch{return [];}});
  const [dropStore,setDropStore]=useState(null);
  const mounted=useRef(true),fileInput=useRef();
- async function refresh(){setLoading(true);try{const v=await api();if(mounted.current){setData(v);setError('');}}catch(e){if(mounted.current)setError(e.message);}finally{if(mounted.current)setLoading(false);}}
- useEffect(()=>{mounted.current=true;refresh();const tick=()=>{if(!document.hidden)refresh();};const timer=setInterval(tick,60000);addEventListener('focus',tick);addEventListener('ai-hub-refresh-market',refresh);document.addEventListener('visibilitychange',tick);return()=>{mounted.current=false;clearInterval(timer);removeEventListener('focus',tick);removeEventListener('ai-hub-refresh-market',refresh);document.removeEventListener('visibilitychange',tick);};},[]);
+ const snapshotReads=useRef({started:0,applied:0,manual:false});
+ async function refresh(report=false) {
+   const reads = snapshotReads.current;
+   if (report) {
+     if (reads.manual) return;
+     reads.manual = true;
+     setRefreshing(true);
+     setMessage('');
+     setError('');
+   }
+   const sequence = ++reads.started;
+   try {
+     const snapshot = await api();
+     if (!mounted.current) return;
+     if (sequence > reads.applied) {
+       reads.applied = sequence;
+       setData(snapshot);
+       setError('');
+     }
+     if (report) {
+       setMessage(snapshot.connection?.mode === 'local' ? '已刷新本机运营记录。' : '已刷新运营服务器记录。');
+     }
+   } catch (e) {
+     if (mounted.current && (report || sequence > reads.applied)) {
+       setError(report ? `刷新运营记录失败。 ${e.message}` : e.message);
+     }
+   } finally {
+     if (report) {
+       reads.manual = false;
+       if (mounted.current) setRefreshing(false);
+     }
+   }
+ }
+ const refreshRecords = () => refresh(true);
+ useEffect(() => {
+   mounted.current = true;
+   refresh();
+   const tick = () => { if (!document.hidden) refresh(); };
+   const timer = setInterval(tick, 60000);
+   addEventListener('focus', tick);
+   addEventListener('ai-hub-refresh-market', refreshRecords);
+   document.addEventListener('visibilitychange', tick);
+   return () => {
+     mounted.current = false;
+     clearInterval(timer);
+     removeEventListener('focus', tick);
+     removeEventListener('ai-hub-refresh-market', refreshRecords);
+     document.removeEventListener('visibilitychange', tick);
+   };
+ }, []);
  useEffect(()=>{function key(e){if(e.key==='Escape'){if(!saving)setModal(null);if(!document.fullscreenElement)setScreen(false);}}addEventListener('keydown',key);return()=>removeEventListener('keydown',key);},[saving]);
  const stores=data?.channels_map||{},statuses=data?.statuses||{};
  const orderedIds=applyOrder(Object.keys(stores),storeOrder);
@@ -120,6 +168,7 @@ export default function MarketPage({standalone=false, route, navigate}){
  }
  const points = Object.values(trends).sort((a, b) => a.date.localeCompare(b.date));
  const readonly = !!data?.read_only;
+ const refreshLabel = data?.connection.mode === 'local' ? '刷新本机记录' : '刷新记录';
  const providers = data?.collection?.providers || { oppo: data?.collection || {} };
  const collecting = Object.values(providers).some(item => item.state === 'running');
  const problems = orderedIds.filter(id => Object.hasOwn(storeAlerts, providers[id]?.state));
@@ -134,7 +183,17 @@ export default function MarketPage({standalone=false, route, navigate}){
  async function collect(operation='sync',provider='oppo'){setError('');const name=stores[provider]||provider;try{const r=await api('collect',{operation,provider});setMessage(operation==='login'?`请在 ${name} 官方专用窗口完成登录；登录和数据接通状态分别核对。`:operation==='pause'?`已暂停 ${name} 定时同步`:operation==='resume'?`已启用 ${name} 每 30 分钟自动同步`:r.started?`已开始查询 ${name} 后台，完成后自动更新页面`:'该平台已有任务在运行');await refresh();}catch(e){setError(e.message);}}
  useEffect(()=>{if(!collecting)return;const timer=setInterval(refresh,3000);return()=>clearInterval(timer);},[collecting]);
  return <section className={`market ${tab==='board'?'market-board-view':''} ${screen?'market-screen':''} ${standalone?'market-standalone':''}`}>
-  <header className="market-head"><div><h1>应用运营<span>.</span></h1><p>com.jryx.isho <span>·</span> 版本、增长与业务数据，在同一个视野里。</p></div><div className="market-actions"><button onClick={()=>{setModal('guide');setError('');}}>数据接入说明</button><button onClick={refresh} disabled={loading}><RefreshCw size={15}/>{loading?'读取中…':'刷新记录'}</button><button onClick={toggleScreen}><Expand size={15}/>{screen?'退出大屏':'大屏模式'}</button>{!screen&&!readonly&&<button className="market-primary" onClick={beginImport}><FileUp size={15}/>导入报表</button>}</div></header>
+  <header className="market-head">
+   <div><h1>应用运营<span>.</span></h1><p>com.jryx.isho <span>·</span> 版本、增长与业务数据，在同一个视野里。</p></div>
+   <div className="market-actions">
+    <button onClick={()=>{setModal('guide');setError('');}}>数据接入说明</button>
+    <button type="button" onClick={refreshRecords} disabled={refreshing} aria-busy={refreshing} title="重新读取已保存的运营记录">
+     <RefreshCw size={15}/>{refreshing ? '刷新中…' : refreshLabel}
+    </button>
+    <button onClick={toggleScreen}><Expand size={15}/>{screen?'退出大屏':'大屏模式'}</button>
+    {!screen&&!readonly&&<button className="market-primary" onClick={beginImport}><FileUp size={15}/>导入报表</button>}
+   </div>
+  </header>
   {error&&<div className="market-alert" role="alert">{error}</div>}{message&&<div className="market-success" role="status"><Check size={15}/>{message}</div>}
   {!!problems.length && <div className="market-alert market-alert-links" role="status"><span>渠道需要处理</span>{problems.map(id => <button className="button" type="button" key={id} onClick={() => go({ tab: 'channels', channel: id, alert: '1', date: '' })}>{stores[id]} · {storeAlerts[providers[id].state]}<ArrowUpRight size={13}/></button>)}</div>}
   {data?<><div className="market-source"><span><Database size={14}/>{data.connection.label}{readonly?' · 只读':''}</span><span>读取于 {time(data.generated_at)} · 页面可见时每分钟重读</span></div>
@@ -163,7 +222,8 @@ function ReviewStrip({reviews,orderedIds,stores}){
 
 function MarketGuide({onImport,readonly}){
  return <div className="market-guide">
-  <p><strong>五个商店支持登录后同步已接入的分项。</strong>在商店连接中查看各渠道的实际读取结果。启用后，本机 Hub 服务每 30 分钟同步一次。登录过期时可重新登录该商店。</p>
+  <p>「刷新记录」重新读取已保存的运营数据。本机模式下，打开「上架进度」，在「商店连接」点对应渠道的同步按钮即可立即采集。</p>
+  <p>本机服务运行时，已启用的渠道各自约每 30 分钟同步。下载量来自渠道的日报，通常采集到前一天。登录过期时可重新登录该商店。</p>
   <h3>先准备什么</h3>
   <ul><li>OPPO：首次在隔离浏览器中登录；登录态只留本机，采集器只保存运营字段，不保存账号、密钥和测试账号。</li><li>其他渠道：后续逐个平台验证登录授权与只读页面接口，再接入自动同步；CSV 保留为可选备用。</li><li>新增、活跃、留存与上传量：你们业务后台的聚合报表或只读统计接口，商店后台不能代替业务云端数据。</li></ul>
   <p>当前导入器接收 Hub 模板格式的 UTF-8 CSV，不会自动识别各平台的原始 Excel / CSV。优先使用上方各平台的独立登录入口，CSV 只作为备用导入方式。</p>
