@@ -7,7 +7,7 @@ import time
 import unittest
 import uuid
 from unittest.mock import patch
-from tracker_hub import TABLES, TrackerError, TrackerService
+from tracker_hub import TABLES, TrackerError, TrackerService, text_cell
 from test_tracker_hub import MemoryClient, sample
 
 
@@ -15,6 +15,37 @@ def op(record_id='recFixtureIssue', change=None, baseline=None, job_id=None):
     return {'operation': 'update', 'kind': 'issue', 'record_id': record_id,
             'client_operation_id': job_id or str(uuid.uuid4()), 'base': baseline or sample(record_id),
             'patch': change or {'status': '测试中'}}
+
+PNG = b'\x89PNG\r\n\x1a\nfixture'
+
+
+class AttachmentClient(MemoryClient):
+    def __init__(self):
+        super().__init__()
+        self.uploads = []
+        self.images = {}
+        self.fail_once = set()
+        self.lose_reply_once = set()
+
+    def attachments(self, kind, record_id):
+        return [dict(item) for item in next(row for row in self.rows[kind] if row['id'] == record_id).get('attachments', [])]
+
+    def append_image(self, kind, record_id, path):
+        name = path.name.split('-', 1)[0]
+        self.uploads.append(name)
+        if name in self.fail_once:
+            self.fail_once.remove(name)
+            raise TrackerError('上传中断', 502)
+        row = next(row for row in self.rows[kind] if row['id'] == record_id)
+        token = 'image' + str(len(self.uploads))
+        row.setdefault('attachments', []).append({'file_token': token, 'name': path.name, 'type': 'image/png'})
+        self.images[token] = path.read_bytes()
+        if name in self.lose_reply_once:
+            self.lose_reply_once.remove(name)
+            raise TrackerError('响应超时', 504, uncertain=True)
+
+    def download_image(self, kind, record_id, file_token, path):
+        path.write_bytes(self.images[file_token])
 
 
 class OutboxTests(unittest.TestCase):
@@ -44,6 +75,56 @@ class OutboxTests(unittest.TestCase):
         self.drain()
         self.assertEqual(self.service.snapshot()['sync']['pending'], 0)
         self.assertEqual(self.client.rows['issue'][0]['status'], '测试中')
+
+    def test_image_retry_survives_restart_without_recreating_or_reuploading(self):
+        client = AttachmentClient()
+        client.fail_once.add('retry')
+        client.lose_reply_once.add('readback')
+        service = TrackerService(client, self.root, queue_autostart=False)
+        image_ids = [str(uuid.uuid4()) for _ in range(3)]
+        for image_id, name in zip(image_ids, ('done.png', 'retry.png', 'readback.png')):
+            service.stage_image(image_id, name, PNG)
+        fields = {**TABLES['task']['fields'], 'attachments':'fldFixtureImages'}
+        with patch.dict(TABLES['task'], {'fields':fields}):
+            queued = service.enqueue({'operation':'create', 'kind':'task', 'content':'附图\n下一行',
+                                      'client_operation_id':str(uuid.uuid4()), 'image_ids':image_ids})
+            self.assertEqual(queued['snapshot']['tasks'][0]['pending_images'], 3)
+            self.assertFalse(client.creates)
+            service.process_next()
+            failure = service.snapshot()['sync']['jobs'][0]
+            self.assertTrue(failure['text_synced'])
+            self.assertEqual(failure['pending_images'], 2)
+            self.assertIn('文字已同步', failure['error'])
+            restarted = TrackerService(client, self.root, queue_autostart=False)
+            restarted.queue_control({'operation':'retry', 'job_id':failure['id']})
+            restarted.process_next()
+            row = restarted.snapshot()['tasks'][0]
+            self.assertEqual(len(client.creates), 1)
+            self.assertEqual(client.uploads, ['done','retry','readback','retry'])
+            self.assertEqual(len(row['attachments']), 3)
+            self.assertEqual(row['content'], '附图\n下一行')
+            token = row['attachments'][0]['file_token']
+            self.assertEqual(restarted.preview_image('task', row['id'], token), ('image/png', PNG))
+            with self.assertRaises(TrackerError):
+                restarted.preview_image('task', row['id'], 'other')
+            self.assertEqual(restarted.snapshot()['sync']['failed'], 0)
+
+    def test_image_only_update_avoids_text_writes_and_caches_long_text(self):
+        client = AttachmentClient()
+        client.rows['issue'] = [sample()]
+        service = TrackerService(client, self.root, queue_autostart=False)
+        service.refresh()
+        image_id = str(uuid.uuid4())
+        service.stage_image(image_id, 'screenshot.png', PNG)
+        body = {**op(), 'patch':{}, 'image_ids':[image_id]}
+        fields = {**TABLES['issue']['fields'], 'attachments':'fldFixtureImages'}
+        with patch.dict(TABLES['issue'], {'fields':fields}):
+            service.enqueue(body)
+            service.process_next()
+        self.assertFalse(client.updates)
+        self.assertEqual(len(service.snapshot()['issues'][0]['attachments']), 1)
+        self.assertEqual(text_cell([{'text':'原文\n'}, {'text':'下一行 '}, {'link':'https://example.com'}]),
+                         '原文\n下一行 https://example.com')
 
     def test_worker_does_not_hold_http_snapshot_lock_during_slow_cloud(self):
         entered, release = threading.Event(), threading.Event()

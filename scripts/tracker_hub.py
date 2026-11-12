@@ -8,6 +8,9 @@ import subprocess
 import threading
 import copy
 import sqlite3
+import re
+import tempfile
+from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from tracker_config import load_settings
@@ -24,6 +27,11 @@ PRIORITIES = ('P0', 'P1', 'P2')
 CATEGORIES = ('需求', '优化')
 NAMES = {'content': '内容', 'status': '状态', 'due': '截止时间', 'priority': '优先级', 'note': '备注', 'tags': '标签', 'archived': '已归档', 'category': '类型'}
 EDITABLE = ('content', 'status', 'due', 'priority', 'note', 'tags', 'archived', 'category')
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_IMAGES = 20
+IMAGE_EXTENSIONS = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif'}
+IMAGE_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
+ATTACHMENT_TOKEN = re.compile(r'[A-Za-z0-9_-]{1,160}')
 
 
 def canonical_status(value):
@@ -96,13 +104,42 @@ def text_cell(value):
     if value in (None, ''):
         return ''
     if isinstance(value, list):
-        return text_cell(value[0] if value else '')
+        return ''.join(text_cell(part) for part in value)
+    if isinstance(value, dict):
+        text = value.get('text') or value.get('link')
+        return text if isinstance(text, str) else ''
     return str(value)
+
+
+def attachment_cells(value):
+    if not isinstance(value, list):
+        return []
+    attachments = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        token = item.get('file_token')
+        if isinstance(token, str) and ATTACHMENT_TOKEN.fullmatch(token):
+            attachments.append({'file_token': token, 'name': str(item.get('name') or '截图'),
+                                'type': str(item.get('type') or item.get('mime_type') or '')})
+    return attachments
+
+
+def image_mime(data):
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image/png'
+    if data.startswith(b'\xff\xd8\xff'):
+        return 'image/jpeg'
+    if data.startswith((b'GIF87a', b'GIF89a')):
+        return 'image/gif'
+    if data.startswith(b'RIFF') and data[8:12] == b'WEBP':
+        return 'image/webp'
+    raise TrackerError('请选择 PNG、JPG、WebP 或 GIF 图片。', 415)
 
 
 def normalize(kind, field_ids, record_id, cells):
     expected = TABLES[kind]['fields']
-    missing = [name for name, field_id in expected.items() if field_id not in field_ids]
+    missing = [name for name, field_id in expected.items() if name != 'attachments' and field_id not in field_ids]
     if missing:
         raise TrackerError('飞书表字段与台账不一致，已停止同步。', 502)
     by_id = {field_id: cells[index] if index < len(cells) else None for index, field_id in enumerate(field_ids)}
@@ -124,6 +161,7 @@ def normalize(kind, field_ids, record_id, cells):
         'tags': tag_list(by_id.get(expected.get('tags'))),
         'archived': by_id.get(expected.get('archived')) is True,
         'category': choice(by_id.get(expected.get('category'))) if kind == 'task' else None,
+        'attachments': attachment_cells(by_id.get(expected.get('attachments'))),
     }
 
 
@@ -131,14 +169,15 @@ class LarkClient:
     def __init__(self, runner=None):
         self.runner = runner or subprocess.run
 
-    def invoke(self, args):
+    def invoke(self, args, *, cwd=None):
         if not BASE_TOKEN:
             raise TrackerError(CONFIG_ERROR or '请先配置本机 tracker-config.json。', 503)
-        writing = any(command in args for command in ('+record-batch-create', '+record-batch-update'))
+        writing = any(command in args for command in ('+record-batch-create', '+record-batch-update', '+record-upload-attachment'))
+        options = {'cwd': cwd} if cwd is not None else {}
         try:
             completed = self.runner(
                 ['lark-cli', *args, '--as', 'user', '--format', 'json'],
-                capture_output=True, text=True, timeout=45,
+                capture_output=True, text=True, timeout=45, **options,
             )
         except subprocess.TimeoutExpired as error:
             raise TrackerError('飞书响应超时，请核对同步结果。', 504, uncertain=writing) from error
@@ -197,6 +236,35 @@ class LarkClient:
             'base', '+record-batch-update', '--base-token', BASE_TOKEN, '--table-id', TABLES[kind]['id'],
             '--json', json.dumps({'update_records': {record_id: fields}}, ensure_ascii=False),
         ])
+
+    def attachments(self, kind, record_id):
+        table = TABLES[kind]
+        field_id = table['fields']['attachments']
+        value = self.invoke([
+            'base', '+record-get', '--base-token', BASE_TOKEN, '--table-id', table['id'],
+            '--record-id', record_id, '--field-id', field_id,
+        ]).get('data') or {}
+        ids, fields = value.get('record_id_list', []), value.get('field_id_list', [])
+        if record_id not in ids or field_id not in fields:
+            raise TrackerError('飞书未返回这条记录的截图字段。', 502)
+        cells = value['data'][ids.index(record_id)]
+        column = fields.index(field_id)
+        return attachment_cells(cells[column] if column < len(cells) else None)
+
+    def append_image(self, kind, record_id, path):
+        table = TABLES[kind]
+        self.invoke([
+            'base', '+record-upload-attachment', '--base-token', BASE_TOKEN,
+            '--table-id', table['id'], '--record-id', record_id,
+            '--field-id', table['fields']['attachments'], '--file', path.name,
+        ], cwd=path.parent)
+
+    def download_image(self, kind, record_id, file_token, path):
+        self.invoke([
+            'base', '+record-download-attachment', '--base-token', BASE_TOKEN,
+            '--table-id', TABLES[kind]['id'], '--record-id', record_id,
+            '--file-token', file_token, '--output', path.name,
+        ], cwd=path.parent)
 
 
 class TrackerService:
@@ -273,6 +341,7 @@ class TrackerService:
                 'archive_supported': {kind: 'archived' in table['fields'] for kind, table in TABLES.items()},
                 'category_fields': {kind: kind == 'task' and 'category' in table['fields'] for kind, table in TABLES.items()},
                 'category_options': list(CATEGORIES),
+                'attachment_fields': {kind: 'attachments' in table['fields'] for kind, table in TABLES.items()},
             }
         jobs = self.outbox.jobs()
         shown = []
@@ -284,7 +353,7 @@ class TrackerService:
             payload = job['payload']
             body, operation = payload['body'], payload['operation']
             kind = body['kind']
-            record_id = body.get('record_id') or seen.get(body.get('client_request_id'), {}).get('record_id') or 'local-' + job['id']
+            record_id = job['applied_record_id'] or body.get('record_id') or seen.get(body.get('client_request_id'), {}).get('record_id') or 'local-' + job['id']
             current = next((row for row in cloud[kind] if row['id'] == record_id), None)
             row = next((row for row in rows[kind] if row['id'] == record_id), None)
             if operation == 'create':
@@ -296,14 +365,16 @@ class TrackerService:
                     rows[kind].append(row)
             else:
                 draft = {**body.get('base', {}), **body['patch']}
-                if row:
+                if row and not job['applied_record_id']:
                     row.update(body['patch'])
             if row:
                 row.update(sync_state=job['state'], sync_job_id=job['id'])
+                row['pending_images'] = row.get('pending_images', 0) + job['pending_images']
             shown.append({'id': job['id'], 'kind': kind, 'operation': operation, 'record_id': record_id,
                           'title': draft.get('content') or (current or {}).get('content') or '记录',
                           'state': job['state'], 'error': job['error'], 'status': job['status'],
-                          'draft': draft, 'patch': body.get('patch'), 'cloud_record': current})
+                          'draft': draft, 'patch': body.get('patch'), 'cloud_record': current,
+                          'pending_images': job['pending_images'], 'text_synced': bool(job['applied_record_id'])})
         value.update(issues=rows['issue'], tasks=rows['task'], sync={
             'pending': sum(job['state'] in ('pending', 'writing') for job in jobs),
             'failed': sum(job['state'] in ('failed', 'uncertain') for job in jobs), 'jobs': shown})
@@ -370,17 +441,82 @@ class TrackerService:
         if not job:
             return False
         operation, body = job['payload']['operation'], job['payload']['body']
+        record_id = job['applied_record_id']
         try:
-            self.create(body) if operation == 'create' else self.update(body)
+            if record_id is None:
+                if operation == 'create':
+                    record_id = self.create(body)['record']['id']
+                else:
+                    if body['patch']:
+                        self.update(body)
+                    record_id = body['record_id']
+                if job['payload'].get('image_ids'):
+                    self.outbox.record_applied(job['id'], record_id)
+            if job['payload'].get('image_ids'):
+                self.sync_images(job['id'], body['kind'], record_id)
         except TrackerError as error:
-            state = 'uncertain' if operation == 'create' and error.uncertain else 'failed'
+            state = 'uncertain' if operation == 'create' and record_id is None and error.uncertain else 'failed'
             self.outbox.finish(job['id'], state, str(error)[:400], error.status)
         except Exception:
-            state = 'uncertain' if operation == 'create' else 'failed'
+            state = 'uncertain' if operation == 'create' and record_id is None else 'failed'
             self.outbox.finish(job['id'], state, '本次同步结果未确认，修改已保留，请核对后继续。', 502)
         else:
             self.outbox.finish(job['id'])
         return True
+
+    def stage_image(self, image_id, name, data):
+        if not IMAGE_ID.fullmatch(image_id or ''):
+            raise TrackerError('截图缺少编号，请重新选择。')
+        mime = image_mime(data)
+        stem = re.sub(r'[\x00-\x1f/\\:*?"<>|]+', '-', Path(unquote(name or '')).stem).strip(' .-')
+        stem = stem.encode('utf-8')[:140].decode('utf-8', errors='ignore').rstrip(' .-')
+        name = f"{stem or '截图'}-{image_id}.{IMAGE_EXTENSIONS[mime]}"
+        try:
+            self.outbox.stage_image(image_id, name, mime, data)
+        except ValueError as error:
+            raise TrackerError(str(error), 409) from error
+
+    def sync_images(self, job_id, kind, record_id):
+        if 'attachments' not in TABLES[kind]['fields']:
+            raise TrackerError('截图字段尚未配置，已保留待同步图片。', 503)
+        failures = []
+        images = self.outbox.images(job_id)
+        for image in images:
+            try:
+                remote = self.client.attachments(kind, record_id)
+                if not any(item['name'] == image['name'] for item in remote):
+                    with tempfile.TemporaryDirectory(dir=self.root / '.local') as directory:
+                        path = Path(directory) / image['name']
+                        path.write_bytes(self.outbox.image_bytes(image['id']))
+                        path.chmod(0o600)
+                        self.client.append_image(kind, record_id, path)
+                    remote = self.client.attachments(kind, record_id)
+                    if not any(item['name'] == image['name'] for item in remote):
+                        raise TrackerError('飞书尚未读回这张截图。', 502)
+                self.outbox.finish_image(image['id'])
+            except TrackerError as error:
+                failures.append(error)
+            except OSError:
+                failures.append(TrackerError('本机截图暂时不可读。', 502))
+        if images:
+            self.refresh()
+        if failures:
+            raise TrackerError(f'文字已同步，{len(failures)} 张截图待重试。{failures[0]}', 502)
+
+    def preview_image(self, kind, record_id, token):
+        if kind not in TABLES or not ATTACHMENT_TOKEN.fullmatch(record_id or '') or not ATTACHMENT_TOKEN.fullmatch(token or ''):
+            raise TrackerError('截图地址无效。', 404)
+        with self.lock:
+            row = self._find(kind, record_id)
+            if not any(image['file_token'] == token for image in row.get('attachments', [])):
+                raise TrackerError('这张截图不属于当前记录。', 404)
+        with tempfile.TemporaryDirectory(dir=self.root / '.local') as directory:
+            path = Path(directory) / 'image'
+            self.client.download_image(kind, record_id, token, path)
+            if not path.is_file() or path.stat().st_size > MAX_IMAGE_BYTES:
+                raise TrackerError('这张图片暂时无法在 Hub 预览。', 422)
+            data = path.read_bytes()
+        return image_mime(data), data
 
     def enqueue(self, body):
         if not isinstance(body, dict):
@@ -396,6 +532,13 @@ class TrackerService:
             job_id = item.get('client_operation_id')
             if not isinstance(job_id, str) or not 8 <= len(job_id) <= 64 or any(ch not in '0123456789abcdef-' for ch in job_id):
                 raise TrackerError('缺少操作编号，请重新打开后保存。')
+            image_ids = item.get('image_ids', [])
+            if not isinstance(image_ids, list) or len(image_ids) > MAX_IMAGES or any(
+                not isinstance(image_id, str) or not IMAGE_ID.fullmatch(image_id) for image_id in image_ids
+            ):
+                raise TrackerError('截图参数不合法，或单次超过 20 张。')
+            if image_ids and 'attachments' not in TABLES[kind]['fields']:
+                raise TrackerError('飞书截图字段尚未配置。')
             if item['operation'] == 'create':
                 form = self._clean_patch(kind, {key: item.get(key) for key in EDITABLE if key in item})
                 form.setdefault('status', '未启动')
@@ -409,12 +552,15 @@ class TrackerService:
                 record_id, base = item.get('record_id'), item.get('base')
                 if not isinstance(record_id, str) or not record_id.startswith('rec') or not isinstance(base, dict):
                     raise TrackerError('这条记录尚未创建完成，请同步后再编辑。')
-                patch = self._clean_patch(kind, item.get('patch'))
+                patch = {} if image_ids and item.get('patch') == {} else self._clean_patch(kind, item.get('patch'))
                 baseline = {key: base.get(key) for key in EDITABLE}
                 baseline['status'] = canonical_status(baseline.get('status'))
                 data = {'kind': kind, 'record_id': record_id, 'base': baseline, 'patch': patch}
                 target = kind + ':' + record_id
-            items.append({'id': job_id, 'target': target, 'payload': {'operation': item['operation'], 'body': data}})
+            payload = {'operation': item['operation'], 'body': data}
+            if image_ids:
+                payload['image_ids'] = list(dict.fromkeys(image_ids))
+            items.append({'id': job_id, 'target': target, 'payload': payload})
         supersedes = body.get('supersedes')
         if supersedes:
             old = self.outbox.get(supersedes)
@@ -740,14 +886,40 @@ class TrackerService:
 
 
 def handle_tracker(handler, service, post=False):
-    path = handler.path.split('?', 1)[0]
-    action = path[len('/api/tracker/'):]
+    url = urlsplit(handler.path)
+    action = url.path[len('/api/tracker/'):]
     try:
         if not post:
+            if action == 'image':
+                query = parse_qs(url.query)
+                kind, record_id, token = (query.get(key, [''])[0] for key in ('kind', 'record', 'file'))
+                mime, image = service.preview_image(kind, record_id, token)
+                handler.send_response(200)
+                handler.send_header('Content-Type', mime)
+                handler.send_header('Content-Length', str(len(image)))
+                handler.send_header('Cache-Control', 'private, max-age=300')
+                handler.send_header('Cross-Origin-Resource-Policy', 'same-origin')
+                handler.send_header('X-Content-Type-Options', 'nosniff')
+                handler.end_headers()
+                try:
+                    handler.wfile.write(image)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
             if action != 'snapshot':
                 raise TrackerError('台账接口不存在。', 404)
             value = service.snapshot() if service.synced_at or service.error else service.refresh()
             handler.send_json(value)
+            return
+        if action == 'stage-image':
+            length = int(handler.headers.get('Content-Length', '0'))
+            if not 0 < length <= MAX_IMAGE_BYTES:
+                raise TrackerError('截图不能为空，每张最大 20 MB。', 413)
+            data = handler.rfile.read(length)
+            if len(data) != length:
+                raise TrackerError('截图传输未完成，请重试。')
+            service.stage_image(handler.headers.get('X-Image-Id'), handler.headers.get('X-Image-Name'), data)
+            handler.send_json({'staged': True}, 201)
             return
         if action not in ('refresh', 'create', 'update', 'enqueue', 'queue-control'):
             raise TrackerError('台账接口不存在。', 404)

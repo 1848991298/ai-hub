@@ -1,12 +1,14 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, SlidersHorizontal, Info, Plus, RefreshCw, Save, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, SlidersHorizontal, Image as ImageIcon, Info, Plus, RefreshCw, Save, X } from 'lucide-react';
 import { blankForm, categoryOf, taskCategories, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, defaultLedgerSort, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
+import { RecordDrawer, RecordImages, RecordText, RecordTextarea, imageTypes, maxImageCount, maxImageSize, stageImage } from './LedgerRecord.jsx';
 import './ledger.css';
 
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date());
 const shortClock = value => value ? value.replace(/^\d{4}-/, '') : '—';
 const requestId = () => crypto.randomUUID();
+const recordTitle = row => (row.content || '').split(/\r?\n/).find(line => line.trim())?.trim() || '无标题';
 
 async function api(action, body) {
   const response = await fetch('/api/tracker/' + action, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -204,7 +206,14 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const columnDrag = useRef(null);
   const rowDrag = useRef(null);
   const [editor, setEditor] = useState(null);
+  const [draftImages, setDraftImages] = useState([]);
+  const [imageError, setImageError] = useState('');
+  const imageUrls = useRef(new Set());
   const mounted = useRef(true);
+  useEffect(() => {
+    const urls = imageUrls.current;
+    return () => { urls.forEach(url => URL.revokeObjectURL(url)); urls.clear(); };
+  }, []);
 
   function normalizeSnapshot(value) {
     const normalize = row => ({ ...row, status: canonicalStatus(row.status), archived: Boolean(row.archived) });
@@ -281,18 +290,74 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     if (recordId || route.overdue) navigate?.({ kind });
   }
   function openCreate(target = kind) {
+    clearDraftImages();
     setTagDraft('');
     setEditor({ mode: 'create', kind: target, requestId: requestId(), base: blankForm(), form: { ...blankForm(), category: target === 'task' && data?.category_fields?.task ? '需求' : '' } });
     setMessage('');
     setError('');
   }
+  function openDetail(row) {
+    clearDraftImages();
+    setFloatBox(null);
+    setEditor({ mode: 'read', kind: row.kind, recordId: row.id, row });
+  }
   function openEdit(row) {
+    clearDraftImages();
     setTagDraft('');
     if (!row.id.startsWith('rec')) { setMessage('这条新记录正在同步，完成后可继续编辑。'); return; }
     const form = valuesOf(row);
-    setEditor({ mode: 'edit', kind: row.kind || kind, recordId: row.id, requestId: requestId(), base: form, form });
+    setEditor({ mode: 'edit', kind: row.kind || kind, recordId: row.id, row, requestId: requestId(), base: form, form });
     setMessage('');
     setError('');
+  }
+  function clearDraftImages() {
+    imageUrls.current.forEach(url => URL.revokeObjectURL(url));
+    imageUrls.current.clear();
+    setDraftImages([]);
+    setImageError('');
+  }
+  function closeEditor() {
+    clearDraftImages();
+    setEditor(null);
+    setTagDraft('');
+  }
+  function addImages(files) {
+    if (saving || !data?.attachment_fields?.[editor?.kind]) return;
+    if (files.some(file => !imageTypes.includes(file.type) || file.size < 1 || file.size > maxImageSize)) {
+      setImageError('请选择 PNG、JPG、WebP 或 GIF 图片，每张最大 20 MB。');
+      return;
+    }
+    if (files.length + draftImages.length > maxImageCount) {
+      setImageError(`一次最多添加 ${maxImageCount} 张图片。`);
+      return;
+    }
+    if (editor.mode === 'read') openEdit(recordForEditor);
+    setImageError('');
+    const additions = files.map(file => {
+      const src = URL.createObjectURL(file);
+      imageUrls.current.add(src);
+      return {id: requestId(), file, src};
+    });
+    setDraftImages(current => [...current, ...additions]);
+  }
+  function pasteImages(event) {
+    if (!canAttach) return;
+    const items = Array.from(event.clipboardData?.items || []);
+    const files = Array.from(event.clipboardData?.files || []);
+    const pasted = files.length ? files : items
+      .filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);
+    const images = pasted.filter(file => file.type.startsWith('image/'));
+    if (!images.length) return;
+    event.preventDefault();
+    addImages(images);
+  }
+  function removeDraftImage(id) {
+    const image = draftImages.find(item => item.id === id);
+    if (!image) return;
+    URL.revokeObjectURL(image.src);
+    imageUrls.current.delete(image.src);
+    setDraftImages(current => current.filter(item => item.id !== id));
+    setImageError('');
   }
   function change(key, value) {
     setEditor(current => ({ ...current, form: { ...current.form, [key]: value } }));
@@ -300,19 +365,22 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   function editorValues() {
     return tagDraft.trim() ? { ...editor.form, tags: mergeTags([...editor.form.tags, tagDraft], knownTags(data)) } : editor.form;
   }
-  async function save(event) {
+  async function save(event, archive) {
     event.preventDefault();
     if (!editor || saving) return;
     const form = editorValues();
     const patch = editor.mode === 'edit' ? changedFields(editor.base, form) : null;
-    if (patch && !Object.keys(patch).length) { setEditor(null); return; }
+    if (patch && archive !== undefined) patch.archived = archive;
+    if (patch && !Object.keys(patch).length && !draftImages.length) { closeEditor(); return; }
     setSaving(true); setError('');
     try {
+      for (const image of draftImages) await stageImage(image);
       const operation = editor.mode === 'create'
         ? { operation: 'create', kind: editor.kind, client_operation_id: editor.requestId, content: form.content, status: form.status, due: form.due || null, priority: form.priority || null, note: form.note, tags: form.tags, ...(editor.kind === 'task' && data?.category_fields?.task ? { category: form.category } : {}) }
         : { operation: 'update', kind: editor.kind, client_operation_id: editor.requestId, record_id: editor.recordId, base: editor.base, patch };
-      const result = await api('enqueue', { ...operation, ...(editor.supersedes ? { supersedes: editor.supersedes, confirmed_not_created: editor.confirmed } : {}) });
-      acceptSnapshot(result.snapshot); setEditor(null); setTagDraft(''); setMessage('');
+      const result = await api('enqueue', { ...operation, ...(draftImages.length ? { image_ids: draftImages.map(image => image.id) } : {}),
+        ...(editor.supersedes ? { supersedes: editor.supersedes, confirmed_not_created: editor.confirmed } : {}) });
+      acceptSnapshot(result.snapshot); closeEditor(); setMessage('');
     } catch (reason) { setError(reason.message + ' 修改仍保留在表单中。'); }
     finally { setSaving(false); }
   }
@@ -333,9 +401,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     catch (reason) { setError(reason.message); }
   }
   function editFailed(job) {
+    clearDraftImages();
     setTagDraft('');
     const base = valuesOf(job.cloud_record || {});
-    setEditor({ mode: job.operation === 'create' ? 'create' : 'edit', kind: job.kind, recordId: job.record_id,
+    setEditor({ mode: job.operation === 'create' ? 'create' : 'edit', kind: job.kind, recordId: job.record_id, carriedImages: job.pending_images,
       requestId: requestId(), base, form: valuesOf({ ...base, ...(job.operation === 'update' ? job.patch : job.draft) }), supersedes: job.id,
       conflict: job.status === 409 && job.cloud_record ? job.cloud_record : null,
       uncertain: job.state === 'uncertain', confirmed: false });
@@ -501,10 +570,19 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const syncLabel = failedJobs.length ? `${failedJobs.length} 项修改待处理` : data?.sync?.pending ? `后台同步 ${data.sync.pending} 项` : readError ? '读取异常 · 保留上次记录' : data?.synced_at ? `已同步 · ${synced}` : loading ? '正在读取…' : '尚未成功读取';
   const syncHelp = '飞书是主数据。打开页面、手动刷新及服务运行期间定期读取。退出 Hub 后停止；截止时间只用于筛选，不会自动完成。';
   const editorLabel = editor?.kind === 'task' ? '任务' : '问题';
+  const reading = editor?.mode === 'read';
+  const recordForEditor = (editor?.kind === 'task' ? tasks : issues).find(row => row.id === editor?.recordId) || editor?.row;
+  const canEditRecord = !!recordForEditor?.id.startsWith('rec');
+  const hasAttachmentField = !!data?.attachment_fields?.[editor?.kind];
+  const canAttach = hasAttachmentField && (!reading || canEditRecord);
+  const drawerTitle = reading ? editorLabel + '详情' : (editor?.mode === 'create' ? '新增' : '编辑') + editorLabel;
+  const imageSection = (hasAttachmentField || recordForEditor?.attachments?.length) ? <RecordImages
+    row={recordForEditor} drafts={draftImages} disabled={saving} onFiles={canAttach ? addImages : undefined}
+    onRemove={removeDraftImage} error={imageError} /> : null;
   function contextButton(row) {
     return <button type="button" className="ledger-context-trigger" title="查看执行资料" aria-label={'执行资料 · ' + row.content} onClick={event => { event.stopPropagation(); setContextRow(row); }}><ClipboardList size={15}/></button>;
   }
-  const tagOptions = showTagColumn ? mergeTags([...knownTags(data), ...(editor?.form.tags || [])]) : [];
+  const tagOptions = showTagColumn ? mergeTags([...knownTags(data), ...(editor?.form?.tags || [])]) : [];
   const reusableTags = knownTags(data);
   const floatRow = floatBox?.rowId ? rows.find(item => item.id === floatBox.rowId) : null;
   const floatTags = floatRow?.tags || [];
@@ -525,7 +603,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
               onDragEnd={() => { rowDrag.current = null; setRowTarget(null); }}><GripVertical size={14}/></span>}
 
           {kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
-          <button type="button" className="ledger-row-title" title={row.content} onClick={event => { event.stopPropagation(); openEdit(row); }}>{row.content}</button>
+          <button type="button" className="ledger-row-title" onClick={event => { event.stopPropagation(); openDetail(row); }}>{recordTitle(row)}</button>
+          {(row.attachments?.length || row.pending_images) ? <span className="ledger-row-image" role="img" aria-label="含截图"><ImageIcon size={14}/></span> : null}
           {contextButton(row)}
           {data?.archive_supported?.[row.kind || kind] && row.id.startsWith('rec') && <button type="button" className="ledger-row-archive" title={row.archived ? '恢复记录' : '归档记录'} aria-label={(row.archived ? '恢复记录 · ' : '归档记录 · ') + row.content} onClick={event => { event.stopPropagation(); archiveRow(row); }}>{row.archived ? <ArchiveRestore size={15}/> : <Archive size={15}/>}</button>}
           {row.sync_state && <span className={'ledger-sync-dot ' + (['failed','uncertain'].includes(row.sync_state) ? 'is-error' : '')} title={['failed','uncertain'].includes(row.sync_state) ? '同步未完成，请处理上方提示' : '已保存在本机，正在同步'} aria-label={['failed','uncertain'].includes(row.sync_state) ? '同步待处理' : '等待同步'}/>}
@@ -548,7 +627,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       case 'created': return <td key={key} className="ledger-time" title={row.created_at || undefined}>{shortClock(row.created_at)}</td>;
       case 'due': return <td key={key} className={overdue ? 'ledger-time ledger-past' : 'ledger-time'} title={overdue ? `${row.due} · 逾期` : undefined}>{row.due || '—'}{overdue && <span className="ledger-overdue-dot" aria-label="逾期" />}</td>;
       case 'priority': return <td key={key}><Pill tone={priorityTone[row.priority]} mode={filters.priority[row.priority]} onClick={row.priority ? () => setFacet('priority', row.priority) : undefined}>{row.priority}</Pill></td>;
-      case 'note': return <td key={key} className="ledger-note">{row.note ? <button type="button" className="ledger-note-text" title={row.note} onClick={event => openFloat(event, { title: '备注', text: row.note })}>{row.note}</button> : '—'}</td>;
+      case 'note': return <td key={key} className="ledger-note">{row.note ? <button type="button" className="ledger-note-text" onClick={event => { event.stopPropagation(); openDetail(row); }}>{row.note}</button> : '—'}</td>;
       default: return null;
     }
   }
@@ -568,9 +647,9 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     {failedJobs.length > 0 && <section className="ledger-sync-errors" role="alert">
       <header><strong>{failedJobs.length} 项修改尚未同步</strong><span>修改已保留，请重试或继续编辑。</span></header>
       {failedJobs.map(job => <div className="ledger-sync-error" key={job.id}><div><strong>{job.title}</strong><p>{job.error}</p></div><div className="ledger-sync-error-actions">
-        {job.state === 'failed' && job.status !== 409 && <button type="button" onClick={() => syncAction(job, 'retry')}>重试</button>}
-        <button type="button" onClick={() => editFailed(job)}>{job.status === 409 ? '处理并继续编辑' : '继续编辑'}</button>
-        <button type="button" onClick={() => syncAction(job, 'discard')}>撤销本机修改</button>
+        {job.state === 'failed' && job.status !== 409 && <button type="button" onClick={() => syncAction(job, 'retry')}>{job.text_synced ? '重试截图' : '重试'}</button>}
+        {!job.text_synced && <button type="button" onClick={() => editFailed(job)}>{job.status === 409 ? '处理并继续编辑' : '继续编辑'}</button>}
+        <button type="button" onClick={() => syncAction(job, 'discard')}>{job.text_synced ? '放弃待传截图' : '撤销本机修改'}</button>
       </div></div>)}
     </section>}
     {message && <div className="ledger-ok" role="status">{message}</div>}
@@ -617,8 +696,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     </div>}
     {view === 'board' ? <div className="ledger-board">{statuses.map(status => <section key={status} className="ledger-column" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); const row = visible.find(item => item.id === id); if (row) moveStatus(row, status); }}>
       <header><strong>{status}</strong><em>{visible.filter(row => row.status === status).length}</em></header>
-      {visible.filter(row => row.status === status).map(row => <article key={row.id} draggable={!saving} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }} onClick={() => openEdit(row)}>
-        <h3>{row.content}</h3>{kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
+      {visible.filter(row => row.status === status).map(row => <article key={row.id} draggable={!saving} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }} onClick={() => openDetail(row)}>
+        <h3><button type="button" className="ledger-row-title" onClick={event => { event.stopPropagation(); openDetail(row); }}>{recordTitle(row)}</button></h3>{kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
         {supportsTags(row.kind) && <div className="ledger-card-tags" onClick={event => event.stopPropagation()}>{(row.tags || []).map(tag => <button key={tag} type="button" className={`ledger-pill is-tag ${(filters.tags || {})[tag] ? `is-${(filters.tags || {})[tag]}` : ''}`} onClick={() => setFacet('tags', tag)}>{tag}</button>)}{taggingId === row.id ? <input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入标签" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitRowTag(row); } if (event.key === 'Escape') { tagCommit.current = true; setTaggingId(null); } }} onBlur={() => commitRowTag(row)} /> : <button type="button" className="ledger-add-tag" onClick={event => beginRowTag(event, row)}>+ 标签</button>}</div>}
         <footer>{showCategoryColumn && <Pill tone={row.category === '优化' ? 'is-category-opt' : 'is-category-need'}>{categoryOf(row)}</Pill>}<Pill tone={priorityTone[row.priority]}>{row.priority}</Pill><span className={isOverdue(row, day) ? 'ledger-past' : ''}>{row.due || '无截止'}</span>{contextButton(row)}</footer>
       </article>)}
@@ -650,7 +729,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
             {key === columns.at(-1) ? <span className="ledger-auto-width" title="末列自动填充剩余空间">自动</span> : <ColumnResize label={columnLabels[key]} value={fittedWidths[key]} minimum={ledgerColumnLimits[key][0]} maximum={ledgerColumnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => resizeColumn(key, value)} />}
           </th>)}
         </tr></thead>
-        <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={() => openEdit(row)}
+        <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={() => openDetail(row)}
           className={[row.archived ? 'is-archived' : '', selected.includes(selectionKey(row)) ? 'is-selected' : '', rowTarget?.key === row.id ? (rowTarget.after ? 'drop-after' : 'drop-before') : ''].filter(Boolean).join(' ')}
           onDragOver={event => {
             const target = rowDrop(event, row);
@@ -677,27 +756,46 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     </div>}
     {floatBox && <div className="ledger-float" style={floatBox.position} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = hasTag(floatTags, tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
     {contextRow && <TaskContext key={contextRow.kind + contextRow.id} row={contextRow} projects={projects} onClose={() => setContextRow(null)}/>}
-    {editor && <div className="ledger-backdrop"><form className="ledger-dialog" role="dialog" aria-modal="true" aria-label={`${editor.mode === 'create' ? '新增' : '编辑'}${editorLabel}`} onSubmit={save}>
-      <header className="ledger-dialog-head">
-        <div><h2>{editor.mode === 'create' ? '新增' : '编辑'}{editorLabel}</h2><p>{editor.mode === 'create' ? '创建时间由飞书生成。未选的截止时间和优先级会留空。' : '只提交改过的字段。飞书若已改同一字段，本次不会覆盖。'}</p></div>
-        <button type="button" className="ledger-close" aria-label="关闭" disabled={saving} onClick={() => setEditor(null)}><X size={18}/></button>
-      </header>
+    {editor && <RecordDrawer title={drawerTitle} onClose={closeEditor} busy={saving} onPaste={pasteImages}
+      subtitle={reading && recordForEditor ? [
+        canonicalStatus(recordForEditor.status), recordForEditor.priority, recordForEditor.category,
+        recordForEditor.due ? `截止 ${recordForEditor.due}` : '',
+      ].filter(Boolean).join(' · ') : undefined}>
+      {reading ? <>
+        <div className="ledger-drawer-body ledger-record-detail">
+          <section><h3>内容</h3><RecordText text={recordForEditor?.content}/></section>
+          {recordForEditor?.note && <section><h3>备注</h3><RecordText text={recordForEditor.note}/></section>}
+          {imageSection}
+        </div>
+        <footer className="ledger-drawer-footer">
+          {canEditRecord ? <button type="button" className="ledger-primary" onClick={() => openEdit(recordForEditor)}>编辑</button>
+            : <span className="ledger-caption">正在同步，完成后可编辑。</span>}
+        </footer>
+      </> : <form className="ledger-drawer-form" onSubmit={save}>
+      <div className="ledger-drawer-body">
       {error && <div className="ledger-alert" role="alert">{error}</div>}
       {editor.conflict && <div className="ledger-conflict" role="status"><strong>飞书已更新</strong><p>当前状态：{canonicalStatus(editor.conflict.status)}；当前备注：{editor.conflict.note || '空'}。</p><p>下方保留你本次修改的字段，其他字段采用飞书最新值。请核对后保存。</p></div>}
       {editor.uncertain && <label className="ledger-uncertain-check"><input type="checkbox" checked={editor.confirmed} onChange={event => setEditor(current => ({ ...current, confirmed: event.target.checked }))}/>我已核对飞书，这条记录尚未创建</label>}
       <div className="ledger-form">
-        <label>内容<textarea aria-label="内容" required autoFocus maxLength={2000} rows={4} value={editor.form.content} onChange={event => change('content', event.target.value)} /></label>
+        <RecordTextarea label="内容" required value={editor.form.content} onChange={value => change('content', value)} />
+        <RecordTextarea label="备注" value={editor.form.note} onChange={value => change('note', value)} />
+        {imageSection}
+        {editor.carriedImages > 0 && <p className="ledger-caption">上一次保存的 {editor.carriedImages} 张截图会随本次修改继续同步。</p>}
         <div className="ledger-split">
           <label>状态<span className="ledger-choice" role="radiogroup" aria-label="状态">{statuses.map(item => <button type="button" role="radio" aria-checked={editor.form.status === item} className={editor.form.status === item ? 'selected' : ''} key={item} onClick={() => change('status', item)}>{item}</button>)}</span></label>
           <label>优先级<span className="ledger-choice" role="radiogroup" aria-label="优先级"><button type="button" role="radio" aria-checked={!editor.form.priority} className={editor.form.priority ? '' : 'selected'} onClick={() => change('priority', '')}>不设置</button>{priorities.map(item => <button type="button" role="radio" aria-checked={editor.form.priority === item} className={editor.form.priority === item ? 'selected' : ''} key={item} onClick={() => change('priority', item)}>{item}</button>)}</span></label>
           {editor.kind === 'task' && supportsCategory && <div className="ledger-category-editor"><span>类型</span><div className="ledger-choice" role="radiogroup" aria-label="任务类型">{taskCategories.map(value => <button type="button" role="radio" key={value} aria-label={value} aria-checked={editor.form.category === value} className={editor.form.category === value ? 'selected' : ''} onClick={() => change('category', value)}>{value}</button>)}</div>{!editor.form.category && <small>这条历史记录尚未分类，可选择后保存。</small>}</div>}
           <label>截止时间<input type="date" value={editor.form.due} onChange={event => change('due', event.target.value)} /></label>
           {supportsTags(editor.kind) && <div className="ledger-tag-editor"><span className="ledger-tag-label">模块标签<small>可多选</small></span><div className="ledger-tag-options" role="group" aria-label="模块标签">{tagOptions.length ? tagOptions.map(tag => { const selected = hasTag(editor.form.tags, tag); return <button type="button" key={tag} aria-label={tag} aria-pressed={selected} onClick={() => toggleTag(tag)}>{selected && <Check size={14} aria-hidden="true"/>}{tag}</button>; }) : <p>暂无模块标签，可在下方添加。</p>}</div><div className="ledger-new-tag"><input aria-label="新标签" maxLength={16} value={tagDraft} placeholder="添加模块标签，例如 app" onChange={event => setTagDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') addTag(event); }} /><button type="button" disabled={!tagDraft.trim()} onClick={addTag}>添加</button></div><p className="ledger-tag-help">输入新标签后直接保存也会加入；同名标签自动复用。</p></div>}
-          <label>创建时间<div className="ledger-readonly">{editor.mode === 'edit' ? (rows.find(row => row.id === editor.recordId)?.created_at || '由飞书生成') : '保存后由飞书生成，不能手填'}</div></label>
+          <label>创建时间<div className="ledger-readonly">{recordForEditor?.created_at || '由飞书生成'}</div></label>
         </div>
-        <label>备注<textarea aria-label="备注" maxLength={2000} rows={3} value={editor.form.note} onChange={event => change('note', event.target.value)} /></label>
       </div>
-      <footer className="ledger-form-actions"><span className="ledger-caption">保存后可继续操作，后台同步；未同步的修改会保留。</span>{editor.mode === 'edit' && data?.archive_supported?.[editor.kind] && <button type="button" className="ledger-dialog-archive" disabled={saving} onClick={async () => { const row = { ...editor.base, id: editor.recordId, kind: editor.kind }; if (await submitPatches([row], { ...changedFields(editor.base, editorValues()), archived: !editor.base.archived })) setEditor(null); }}>{editor.base.archived ? '恢复此记录' : '归档此记录'}</button>}<button className="ledger-primary" disabled={saving || (editor.uncertain && !editor.confirmed)}><Save size={15}/>{saving ? '正在保存…' : '保存'}</button></footer>
-    </form></div>}
+      </div>
+      <footer className="ledger-drawer-footer"><span className="ledger-caption">保存后后台同步</span>
+        {editor.mode === 'edit' && data?.archive_supported?.[editor.kind] && <button type="button" className="ledger-dialog-archive" disabled={saving} onClick={event => save(event, !editor.base.archived)}>{editor.base.archived ? '恢复此记录' : '归档此记录'}</button>}
+        <button type="submit" className="ledger-primary" disabled={saving || (editor.uncertain && !editor.confirmed)}><Save size={15}/>{saving ? '正在保存…' : '保存'}</button>
+      </footer>
+    </form>}
+    </RecordDrawer>}
   </section>;
 }

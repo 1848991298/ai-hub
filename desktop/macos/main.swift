@@ -200,6 +200,23 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         return nil
     }
 
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void) {
+        guard frame.isMainFrame, isLocal(frame.request.url) else {
+            completionHandler(nil)
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+    }
+
     @objc private func reloadPage() {
         if isLocal(webView.url) { webView.reload() }
         else { startup?.cancel(); startup = Task { await connect() } }

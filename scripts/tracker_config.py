@@ -6,7 +6,7 @@ import re
 from urllib.parse import urlsplit
 
 FIELD_NAMES = ('content', 'status', 'created', 'due', 'priority', 'note', 'tags')
-OPTIONAL_FIELDS = ('archived', 'category')
+OPTIONAL_FIELDS = ('archived', 'category', 'attachments')
 REQUIRED_FIELDS = set(FIELD_NAMES) - {'tags'}
 DEFAULT_TABLES = {
     kind: {'id': '', 'label': label,
