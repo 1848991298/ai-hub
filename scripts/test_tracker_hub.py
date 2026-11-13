@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
-from tracker_hub import TABLES, TrackerError, TrackerService, LarkClient, normalize
+from tracker_hub import EDITABLE, TABLES, TrackerError, TrackerService, LarkClient, normalize
 
 
 class MemoryClient:
@@ -13,10 +13,19 @@ class MemoryClient:
         self.rows = {'issue': [], 'task': []}
         self.creates = []
         self.updates = []
+        self.deletes = []
         self.fail = None
 
-    def list_kind(self, kind):
+    def list_kind(self, kind, *, require_complete=False):
         return [dict(row) for row in self.rows[kind]]
+
+    def delete(self, kind, record_id):
+        self.deletes.append((kind, record_id))
+        if self.fail == 'delete-denied':
+            raise TrackerError('缺少删除权限。', 403, ['base:record:delete'])
+        self.rows[kind] = [row for row in self.rows[kind] if row['id'] != record_id]
+        if self.fail == 'delete-timeout':
+            raise TrackerError('超时。', 504, uncertain=True)
 
     def create(self, kind, fields):
         if self.fail == 'create':
@@ -58,6 +67,56 @@ class TrackerTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.client = MemoryClient()
         self.service = TrackerService(self.client, Path(self.tmp.name))
+
+    def delete_request(self):
+        row = sample()
+        self.client.rows['issue'].append(row)
+        self.service.refresh()
+        return {
+            'kind': 'issue', 'record_id': row['id'], 'confirmed': True,
+            'base': {**{key: row.get(key) for key in EDITABLE}, 'attachment_tokens': []},
+        }
+
+    def test_delete_requires_confirmation_and_refuses_stale_record(self):
+        body = self.delete_request()
+        with self.assertRaises(TrackerError) as error:
+            self.service.delete({**body, 'confirmed': False})
+        self.assertEqual(error.exception.status, 400)
+        self.client.rows['issue'][0]['note'] = '其他人在飞书修改了备注'
+        with self.assertRaises(TrackerError) as error:
+            self.service.delete(body)
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(self.client.deletes, [])
+
+    def test_delete_verifies_absence_after_timeout_and_is_idempotent(self):
+        body = self.delete_request()
+        self.client.rows['task'].append({**sample(body['record_id']), 'kind': 'task'})
+        self.client.fail = 'delete-timeout'
+        result = self.service.delete(body)
+        self.assertEqual(result['snapshot']['issues'], [])
+        self.assertEqual(self.service.delete(body)['snapshot']['issues'], [])
+        self.assertEqual(self.client.deletes, [('issue', body['record_id'])])
+        self.assertEqual(len(self.client.rows['task']), 1)
+
+    def test_delete_permission_error_keeps_cached_record(self):
+        body = self.delete_request()
+        self.client.fail = 'delete-denied'
+        with self.assertRaises(TrackerError) as error:
+            self.service.delete(body)
+        self.assertEqual(error.exception.missing, ['base:record:delete'])
+        self.assertEqual(self.service.snapshot()['issues'][0]['id'], body['record_id'])
+
+    def test_delete_refuses_record_with_queued_changes(self):
+        body = self.delete_request()
+        self.service._queue_autostart = False
+        self.service.enqueue({
+            **body, 'operation': 'update', 'client_operation_id': 'abc12345',
+            'patch': {'note': '等待同步的备注'},
+        })
+        with self.assertRaises(TrackerError) as error:
+            self.service.delete(body)
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(self.client.deletes, [])
 
     def test_real_column_order_does_not_decide_fields(self):
         issue_ids = [TABLES['issue']['fields'][name] for name in ('content','created','status','priority','due','note','tags')]

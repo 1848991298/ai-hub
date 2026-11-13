@@ -380,6 +380,10 @@
 .ledger-drawer-footer{justify-content:flex-end;border-top:1px solid var(--border)}
 .ledger-drawer-footer .ledger-caption:first-child{margin-right:auto}
 .ledger-drawer-footer .ledger-primary{min-height:36px;padding:0 14px;border-radius:8px}
+.ledger-delete-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 12px;border:1px solid var(--border);border-radius:8px;color:var(--p0)}
+.ledger-delete-button:hover:enabled,.ledger-delete-button:focus-visible{background:var(--p0-bg)}
+.ledger-delete-button:disabled{opacity:.55}
+.ledger-drawer.is-reading .ledger-delete-button:first-child{margin-inline-end:auto}
 .ledger-record-detail{display:flex;flex-direction:column;gap:24px}
 .ledger-record-detail h3,.ledger-images-head h3{margin:0 0 6px;color:var(--text-muted);font-size:var(--text-sm);font-weight:650}
 .ledger-record-detail h3[tabindex]:focus{outline:none;color:var(--accent)}

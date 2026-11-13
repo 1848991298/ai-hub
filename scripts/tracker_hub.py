@@ -32,6 +32,7 @@ MAX_IMAGES = 20
 IMAGE_EXTENSIONS = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif'}
 IMAGE_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
 ATTACHMENT_TOKEN = re.compile(r'[A-Za-z0-9_-]{1,160}')
+RECORD_ID = re.compile(r'rec[A-Za-z0-9_-]{1,157}')
 
 
 def canonical_status(value):
@@ -172,7 +173,7 @@ class LarkClient:
     def invoke(self, args, *, cwd=None):
         if not BASE_TOKEN:
             raise TrackerError(CONFIG_ERROR or '请先配置本机 tracker-config.json。', 503)
-        writing = any(command in args for command in ('+record-batch-create', '+record-batch-update', '+record-upload-attachment'))
+        writing = any(command in args for command in ('+record-batch-create', '+record-batch-update', '+record-upload-attachment', '+record-delete'))
         options = {'cwd': cwd} if cwd is not None else {}
         try:
             completed = self.runner(
@@ -193,11 +194,13 @@ class LarkClient:
                 raise TrackerError('当前授权不能修改飞书记录，缺少 base:record:update。输入已保留，完成授权后再保存。', 403, missing)
             if 'base:record:create' in missing:
                 raise TrackerError('当前授权不能新建飞书记录，缺少 base:record:create。输入已保留。', 403, missing)
+            if 'base:record:delete' in missing:
+                raise TrackerError('当前授权不能删除飞书记录，缺少 base:record:delete。', 403, missing)
             message = err.get('message') or '飞书暂时无法完成这次操作。'
             raise TrackerError(message, 502, missing)
         return payload
 
-    def list_kind(self, kind):
+    def list_kind(self, kind, *, require_complete=False):
         table_id = TABLES[kind]['id']
         rows, offset = [], 0
         while True:
@@ -209,12 +212,19 @@ class LarkClient:
             ids = data.get('record_id_list') or []
             cells = data.get('data') or []
             field_ids = data.get('field_id_list') or []
+            if require_complete and (not isinstance(data.get('record_id_list'), list)
+                                     or not isinstance(cells, list) or len(ids) != len(cells)):
+                raise TrackerError('飞书未返回可核对的记录列表。', 502)
             for record_id, row in zip(ids, cells):
                 rows.append(normalize(kind, field_ids, record_id, row))
-            if not data.get('has_more') or not ids:
+            if not data.get('has_more'):
+                return rows
+            if not ids:
+                if require_complete:
+                    raise TrackerError('飞书未返回完整的记录列表。', 502)
                 return rows
             offset += len(ids)
-            if offset > 2000:
+            if offset > 2000 and not require_complete:
                 return rows
 
     def create(self, kind, fields):
@@ -235,6 +245,12 @@ class LarkClient:
         self.invoke([
             'base', '+record-batch-update', '--base-token', BASE_TOKEN, '--table-id', TABLES[kind]['id'],
             '--json', json.dumps({'update_records': {record_id: fields}}, ensure_ascii=False),
+        ])
+
+    def delete(self, kind, record_id):
+        self.invoke([
+            'base', '+record-delete', '--base-token', BASE_TOKEN, '--table-id', TABLES[kind]['id'],
+            '--record-id', record_id, '--yes',
         ])
 
     def attachments(self, kind, record_id):
@@ -273,6 +289,7 @@ class TrackerService:
         self.root = Path(root or os.environ.get('AI_HUB_ROOT') or Path(__file__).resolve().parent.parent)
         self.lock = threading.Lock()
         self._write_lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
         self.rows = {'issue': [], 'task': []}
         self.synced_at = None
         self.error = None
@@ -381,6 +398,10 @@ class TrackerService:
         return value
 
     def refresh(self):
+        with self._refresh_lock:
+            return self._refresh()
+
+    def _refresh(self):
         try:
             issues = self.client.list_kind('issue')
             tasks = self.client.list_kind('task')
@@ -567,7 +588,8 @@ class TrackerService:
             if old and old['state'] == 'uncertain' and body.get('confirmed_not_created') is not True:
                 raise TrackerError('新建结果未确认，请先核对飞书后再继续。', 409)
         try:
-            self.outbox.enqueue(items, supersedes)
+            with self._write_lock:
+                self.outbox.enqueue(items, supersedes)
         except ValueError as error:
             raise TrackerError(str(error), 409) from error
         if self._queue_autostart:
@@ -713,6 +735,44 @@ class TrackerService:
     def update(self, body):
         with self._write_lock:
             return self._update(body)
+
+    def delete(self, body):
+        kind = self._kind(body)
+        record_id, baseline = body.get('record_id'), body.get('base')
+        if not isinstance(record_id, str) or not RECORD_ID.fullmatch(record_id):
+            raise TrackerError('缺少要删除的飞书记录。')
+        if body.get('confirmed') is not True or not isinstance(baseline, dict) or not set(EDITABLE).issubset(baseline):
+            raise TrackerError('请先核对并确认要删除的记录。')
+        with self._write_lock, self._refresh_lock:
+            if any(job['payload']['body']['kind'] == kind and record_id in (
+                job['payload']['body'].get('record_id'), job['applied_record_id'],
+                self._seen.get(job['payload']['body'].get('client_request_id'), {}).get('record_id'),
+            ) for job in self.outbox.jobs()):
+                raise TrackerError('这条记录还有待同步的修改，请处理后再删除。', 409)
+            rows = self.client.list_kind(kind, require_complete=True)
+            current = next((row for row in rows if row['id'] == record_id), None)
+            if current is not None:
+                attachments = [image['file_token'] for image in current.get('attachments', [])]
+                if attachments != baseline.get('attachment_tokens') or any(
+                    not self._same(key, current.get(key), baseline[key]) for key in EDITABLE
+                ):
+                    raise TrackerError('这条记录在飞书已有新修改。请刷新后重新确认删除。', 409)
+                try:
+                    self.client.delete(kind, record_id)
+                except TrackerError as error:
+                    if not error.uncertain:
+                        raise
+                try:
+                    rows = self.client.list_kind(kind, require_complete=True)
+                except TrackerError as error:
+                    raise TrackerError('删除结果暂未读回，请刷新后核对。', 502) from error
+                if any(row['id'] == record_id for row in rows):
+                    raise TrackerError('飞书仍返回这条记录，请刷新后核对。', 409)
+            # 仅在按 ID 确认飞书已无此记录后移除缓存。
+            with self.lock:
+                self.rows[kind] = rows
+                self.outbox.cache({'rows': self.rows, 'synced_at': self.synced_at})
+            return {'snapshot': self.snapshot()}
 
     def _update(self, body):
         kind = self._kind(body)
@@ -921,7 +981,7 @@ def handle_tracker(handler, service, post=False):
             service.stage_image(handler.headers.get('X-Image-Id'), handler.headers.get('X-Image-Name'), data)
             handler.send_json({'staged': True}, 201)
             return
-        if action not in ('refresh', 'create', 'update', 'enqueue', 'queue-control'):
+        if action not in ('refresh', 'create', 'update', 'delete', 'enqueue', 'queue-control'):
             raise TrackerError('台账接口不存在。', 404)
         length = int(handler.headers.get('Content-Length', '0'))
         if not 0 <= length <= 1024 * 1024:
@@ -937,6 +997,8 @@ def handle_tracker(handler, service, post=False):
             handler.send_json(service.enqueue(body), 202)
         elif action == 'queue-control':
             handler.send_json(service.queue_control(body))
+        elif action == 'delete':
+            handler.send_json(service.delete(body))
         else:
             result = service.create(body) if action == 'create' else service.update(body)
             handler.send_json(result)

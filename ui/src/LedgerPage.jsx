@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, SlidersHorizontal, Image as ImageIcon, Info, Plus, RefreshCw, Save, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, SlidersHorizontal, Image as ImageIcon, Info, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import { blankForm, categoryOf, taskCategories, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, defaultLedgerSort, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
 import { RecordDrawer, RecordImages, RecordText, RecordTextarea, imageTypes, maxImageCount, maxImageSize, stageImage, useRecordPreview } from './LedgerRecord.jsx';
@@ -328,6 +328,32 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     clearDraftImages();
     setEditor(null);
     setTagDraft('');
+  }
+  function confirmDelete(row) {
+    setEditor(current => ({ ...current, mode: 'delete', deleteBase: {
+      ...valuesOf(row), status: canonicalStatus(row.status),
+      attachment_tokens: (row.attachments || []).map(image => image.file_token),
+    } }));
+    setError('');
+  }
+  async function deleteRecord() {
+    if (saving || editor?.mode !== 'delete') return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await api('delete', {
+        kind: editor.kind, record_id: editor.recordId, base: editor.deleteBase, confirmed: true,
+      });
+      acceptSnapshot(result.snapshot);
+      closeEditor();
+      if (recordId === editor.recordId) navigate?.({ kind, overdue: route.overdue });
+      setMessage('已从飞书删除记录。');
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setSaving(false);
+    }
   }
   function addImages(files) {
     if (saving || !data?.attachment_fields?.[editor?.kind]) return;
@@ -792,7 +818,23 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     {floatBox && <div className="ledger-float" style={floatBox.position} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = hasTag(floatTags, tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
     {contextRow && <TaskContext key={contextRow.kind + contextRow.id} row={contextRow} projects={projects} onClose={() => setContextRow(null)}/>}
     {recordPreview.popup}
-    {editor && <RecordDrawer title={drawerTitle} onClose={closeEditor} busy={saving} onPaste={pasteImages}
+    {editor?.mode === 'delete' && <RecordDrawer key="delete" title="删除记录" onClose={closeEditor} busy={saving}>
+      <div className="ledger-drawer-body ledger-record-detail">
+        <section><h3>将删除</h3><RecordText text={editor.deleteBase.content}/></section>
+        <p>确认后将从飞书多维表格删除这条记录。归档可在「已归档」中恢复。</p>
+        {error && <div className="ledger-alert" role="alert">{error}</div>}
+      </div>
+      <footer className="ledger-drawer-footer">
+        <button type="button" className="ledger-dialog-archive" disabled={saving} onClick={() => {
+          setError('');
+          setEditor(current => ({ ...current, mode: 'read', focusNote: false }));
+        }}>取消</button>
+        <button type="button" className="ledger-delete-button" disabled={saving} onClick={deleteRecord}>
+          {saving ? '正在删除…' : '确认删除'}
+        </button>
+      </footer>
+    </RecordDrawer>}
+    {editor && editor.mode !== 'delete' && <RecordDrawer key="record" title={drawerTitle} onClose={closeEditor} busy={saving} onPaste={pasteImages}
       reading={reading} initialFocus={reading && editor.focusNote ? noteHeading : undefined} animate={editor.animate}
       subtitle={reading && recordForEditor ? [
         canonicalStatus(recordForEditor.status), recordForEditor.priority, recordForEditor.category,
@@ -805,6 +847,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
           {imageSection}
         </div>
         <footer className="ledger-drawer-footer">
+          {canEditRecord && <button type="button" className="ledger-delete-button" disabled={saving || !!recordForEditor.sync_state}
+            title={recordForEditor.sync_state ? '记录有待同步的修改' : undefined} onClick={() => confirmDelete(recordForEditor)}>
+            <Trash2 size={15} aria-hidden="true"/>删除记录
+          </button>}
           {canEditRecord ? <button type="button" className="ledger-primary" onClick={() => openEdit(recordForEditor)}>编辑</button>
             : <span className="ledger-caption">正在同步，完成后可编辑。</span>}
         </footer>
