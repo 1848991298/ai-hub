@@ -44,9 +44,30 @@ function ModelPicker({ names, selected, onChange }) {
   </details>;
 }
 
-const exact = value => known(value) ? new Intl.NumberFormat('zh-CN').format(value) : '—';
-function DayDetail({ row, date }) {
-  return <div className="usage-day-detail" aria-live="polite"><header><div><strong>{date || '选择日期'}</strong><small>{row ? `${exact(row.total_tokens)} tokens · ${row.pricing_complete ? '完整定价' : '含回退定价或缺少价格'}` : '该日未返回所选模型的数据'}</small></div><div><span>参考估算</span><strong>{money(row?.reference_usd ?? row?.estimated_usd)}</strong></div></header>
+const tokenNumber = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
+const exact = value => known(value) ? tokenNumber.format(value) : '—';
+const tokenUnits = [[1e8, '亿'], [1e7, '千万'], [1e6, '百万'], [1e4, '万']];
+
+function tokenScale(value) {
+  if (!known(value)) return '—';
+  const unit = tokenUnits.find(([size]) => value >= size);
+  if (!unit) return `${exact(value)} tokens`;
+  const [size, label] = unit;
+  return `约 ${tokenNumber.format(value / size)} ${label} tokens`;
+}
+
+function DayDetail({ row, date, tokenBucket }) {
+  return <div className="usage-day-detail" aria-live="polite">
+    <header>
+      <div><strong>{date || '选择日期'}</strong><small>{row ? `${exact(row.total_tokens)} tokens · ${row.pricing_complete ? '完整定价' : '含回退定价或缺少价格'}` : '该日未返回所选模型的数据'}</small></div>
+      <div className="usage-day-summary">
+        {tokenBucket && <div title={known(tokenBucket.value) ? `${exact(tokenBucket.value)} tokens` : tokenBucket.missingReason}>
+          <span>{tokenBucket.days > 1 ? '区间用量' : '当日用量'}</span>
+          <strong className="usage-token-scale">{tokenScale(tokenBucket.value)}</strong>
+        </div>}
+        <div><span>参考估算</span><strong>{money(row?.reference_usd ?? row?.estimated_usd)}</strong></div>
+      </div>
+    </header>
     {row && <><div className="usage-day-counters"><span>输入 <b>{exact(row.input_tokens)}</b></span><span>其中缓存 <b>{exact(row.cached_tokens)}</b></span><span>输出 <b>{exact(row.output_tokens)}</b></span></div>
     <div className="usage-day-models"><table><thead><tr><th>当日模型</th><th>Tokens</th><th>参考费用</th><th>定价状态</th></tr></thead><tbody>{(row.models || []).map(model => <tr key={model.name}><td><code>{model.name}</code></td><td>{exact(model.total_tokens)}</td><td>{money(model.reference_usd ?? model.estimated_usd ?? (row.models.length === 1 ? row.reference_usd ?? row.estimated_usd : null))}</td><td>{model.fallback_pricing ? '回退定价' : '来源已匹配'}</td></tr>)}</tbody></table></div></>}
   </div>;
@@ -78,7 +99,7 @@ function Trend({ dates, daily, metric }) {
       })}
     </svg>
     {selectedDates.length>1 && <label className="usage-group-date">组内逐日明细 <select aria-label="组内明细日期" value={date} onChange={e => setChosenDay(e.target.value)}>{selectedDates.map(day => <option key={day}>{day}</option>)}</select></label>}
-    <DayDetail row={row} date={date}/>
+    <DayDetail row={row} date={date} tokenBucket={metric === 'total_tokens' ? selected : null}/>
   </div>;
 }
 
