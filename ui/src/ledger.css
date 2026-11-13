@@ -90,6 +90,10 @@
 .ledger-float-tags .is-selected{border-color:var(--accent);color:var(--text);background:var(--accent-soft,var(--blue-bg));cursor:default}
 .ledger-note{color:var(--text-secondary);line-height:1.55}
 .ledger-note-text{display:block;width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer}
+.ledger .ledger-auto-rows tbody td{padding-block:8px 4px;vertical-align:top}
+.ledger .ledger-auto-rows tbody .ledger-index{padding-block:0;vertical-align:middle}
+.ledger-auto-rows .ledger-content{align-items:flex-start}
+.ledger-auto-rows .ledger-row-title,.ledger-auto-rows .ledger-note-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
 .ledger-text-preview {
   position: fixed;
   z-index: 29;

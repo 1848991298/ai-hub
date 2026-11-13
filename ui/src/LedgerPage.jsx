@@ -176,6 +176,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('ai-hub-ledger-view') === 'board' ? 'board' : 'list');
+  const [rowHeight, setRowHeight] = useState(() => savedValue('ai-hub-ledger-row-height') === 'auto' ? 'auto' : 'single');
   const [tagDraft, setTagDraft] = useState('');
   const [order, setOrder] = useState(() => savedValue('ai-hub-ledger-order') || {});
   const [floatBox, setFloatBox] = useState(null);
@@ -244,6 +245,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   useEffect(() => { if (!data?.sync?.pending) return; const timer = setInterval(() => load(), 1200); return () => clearInterval(timer); }, [data?.sync?.pending]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-hidden-columns', JSON.stringify(hiddenColumns)); } catch {} }, [hiddenColumns]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-archive-mode', JSON.stringify(archiveMode)); } catch {} }, [archiveMode]);
+  useEffect(() => { try { localStorage.setItem('ai-hub-ledger-row-height', JSON.stringify(rowHeight)); } catch {} }, [rowHeight]);
   useEffect(() => { if (['active', 'archived', 'all'].includes(route.archive)) setArchiveMode(route.archive); }, [route.archive]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-columns', JSON.stringify(widths)); } catch { /* 本窗口仍可使用当前列宽。 */ } }, [widths]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-width-mode', JSON.stringify(widthMode)); } catch {} }, [widthMode]);
@@ -557,6 +559,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
 
   const availableWidth = Math.max(0, tableViewport - rowIndexWidth);
   const fittedWidths = widthMode === 'fill' ? fillColumnWidths(availableWidth, columns) : stretchLastColumn(widths, availableWidth, columns);
+  // 窄窗口保留末列备注的阅读宽度，表格沿用横向滚动。
+  if (view === 'list' && rowHeight === 'auto' && columns.at(-1) === 'note') {
+    fittedWidths.note = Math.max(ledgerColumnDefaults.note, fittedWidths.note);
+  }
   const tableWidth = columns.reduce((sum, key) => sum + fittedWidths[key], rowIndexWidth);
   const counts = {
     status: Object.fromEntries(statuses.map(item => [item, rows.filter(row => row.status === item).length])),
@@ -598,12 +604,13 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setFloatBox(null);
   }
   const tagCounts = Object.fromEntries(tagOptions.map(tag => [tag, rows.filter(row => hasTag(row.tags, tag)).length]));
-  function recordButton(row, field = 'content') {
+  function recordButton(row, field = 'content', wrap = false) {
     const note = field === 'note';
     const fullText = row[field] || '';
-    const text = note ? fullText : recordTitle(row);
+    const text = note ? fullText : (wrap && fullText.trim()) || recordTitle(row);
+    const preview = wrap ? {} : recordPreview.bind(fullText, note ? '备注' : '内容', !note && text === fullText.trim());
     return <button type="button" className={note ? 'ledger-note-text' : 'ledger-row-title'} aria-haspopup="dialog"
-      {...recordPreview.bind(fullText, note ? '备注' : '内容', !note && text === fullText.trim())}
+      {...preview}
       onClick={event => {
         event.stopPropagation();
         openDetail(row, event, note);
@@ -620,7 +627,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
               onDragEnd={() => { rowDrag.current = null; setRowTarget(null); }}><GripVertical size={14}/></span>}
 
           {kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
-          {recordButton(row)}
+          {recordButton(row, 'content', rowHeight === 'auto')}
           {(row.attachments?.length || row.pending_images) ? <span className="ledger-row-image" role="img" aria-label="含截图"><ImageIcon size={14}/></span> : null}
           {contextButton(row)}
           {data?.archive_supported?.[row.kind || kind] && row.id.startsWith('rec') && <button type="button" className="ledger-row-archive" title={row.archived ? '恢复记录' : '归档记录'} aria-label={(row.archived ? '恢复记录 · ' : '归档记录 · ') + row.content} onClick={event => { event.stopPropagation(); archiveRow(row); }}>{row.archived ? <ArchiveRestore size={15}/> : <Archive size={15}/>}</button>}
@@ -644,7 +651,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       case 'created': return <td key={key} className="ledger-time" title={row.created_at || undefined}>{shortClock(row.created_at)}</td>;
       case 'due': return <td key={key} className={overdue ? 'ledger-time ledger-past' : 'ledger-time'} title={overdue ? `${row.due} · 逾期` : undefined}>{row.due || '—'}{overdue && <span className="ledger-overdue-dot" aria-label="逾期" />}</td>;
       case 'priority': return <td key={key}><Pill tone={priorityTone[row.priority]} mode={filters.priority[row.priority]} onClick={row.priority ? () => setFacet('priority', row.priority) : undefined}>{row.priority}</Pill></td>;
-      case 'note': return <td key={key} className="ledger-note">{row.note ? recordButton(row, 'note') : '—'}</td>;
+      case 'note': return <td key={key} className="ledger-note">{row.note ? recordButton(row, 'note', rowHeight === 'auto') : '—'}</td>;
       default: return null;
     }
   }
@@ -696,6 +703,17 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         <select className="ledger-archive-scope" aria-label="记录范围" value={archiveMode} onChange={event => { setArchiveMode(event.target.value); setSelected([]); }}><option value="active">当前记录</option><option value="archived">已归档 {archivedCount}</option><option value="all">全部（含归档）</option></select>
         <LedgerMenu label="视图设置" triggerLabel="视图" icon={SlidersHorizontal} align="end" width={340} chevron>{close => <div className="ledger-view-panel">
           <h3>显示方式</h3><div className="ledger-tabs" role="group" aria-label="视图"><button type="button" aria-pressed={view === 'list'} className={view === 'list' ? 'selected' : ''} onClick={() => { chooseView('list'); close(); }}>列表</button><button type="button" aria-pressed={view === 'board'} className={view === 'board' ? 'selected' : ''} onClick={() => { chooseView('board'); close(); }}>看板</button></div>
+          {view === 'list' && <>
+            <h3>行高</h3>
+            <div className="ledger-tabs" role="group" aria-label="行高">
+              {[['single', '单行'], ['auto', '自适应']].map(([mode, label]) => (
+                <button key={mode} type="button" aria-pressed={rowHeight === mode}
+                  className={rowHeight === mode ? 'selected' : ''} onClick={() => setRowHeight(mode)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>}
           <h3>列宽</h3><div className="ledger-tabs" role="group" aria-label="表格宽度模式"><button type="button" aria-pressed={widthMode === 'fill'} className={widthMode === 'fill' ? 'selected' : ''} onClick={() => setWidthMode('fill')}>适应窗口</button><button type="button" aria-pressed={widthMode === 'manual'} className={widthMode === 'manual' ? 'selected' : ''} onClick={() => setWidthMode('manual')}>手动列宽</button></div>
           {allowReorder && <label className="ledger-manual-toggle"><input type="checkbox" checked={manualOrder} onChange={() => saveOrder(manualIds.length ? manualIds : sorted.map(row => row.id), !manualOrder)}/>手动调整行序</label>}
           {!manualOrder && view === 'list' && <SortSettings rules={sort} onChange={setSort}/>}
@@ -719,7 +737,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         <footer>{showCategoryColumn && <Pill tone={row.category === '优化' ? 'is-category-opt' : 'is-category-need'}>{categoryOf(row)}</Pill>}<Pill tone={priorityTone[row.priority]}>{row.priority}</Pill><span className={isOverdue(row, day) ? 'ledger-past' : ''}>{row.due || '无截止'}</span>{contextButton(row)}</footer>
       </article>)}
     </section>)}</div> : <div className="ledger-table-wrap" ref={tableScroll} role="region" aria-label="台账列表" tabIndex={0}>
-      <table style={{ width: tableWidth }}>
+      <table className={rowHeight === 'auto' ? 'ledger-auto-rows' : undefined} style={{ width: tableWidth }}>
         <colgroup><col style={{ width: rowIndexWidth }}/>{columns.map(key => <col key={key} style={{ width: fittedWidths[key] }}/>)}</colgroup>
         <thead><tr>
           <th scope="col" className="ledger-index" aria-label="批量选择"><div className="ledger-index-content"><input type="checkbox" aria-label="选择当前显示的记录" checked={everySelected} ref={element => { if (element) element.indeterminate = selectedRows.length > 0 && !everySelected; }} onChange={selectAll}/></div></th>
