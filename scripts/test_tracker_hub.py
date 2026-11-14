@@ -2,6 +2,7 @@
 """台账同步的内存验证：不调用飞书，不改两条真实模拟记录。"""
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
@@ -66,13 +67,14 @@ class TrackerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.client = MemoryClient()
-        self.service = TrackerService(self.client, Path(self.tmp.name))
+        self.service = TrackerService(self.client, Path(self.tmp.name), queue_autostart=False)
 
     def delete_request(self):
         row = sample()
         self.client.rows['issue'].append(row)
         self.service.refresh()
         return {
+            'operation': 'delete', 'client_operation_id': 'def12345',
             'kind': 'issue', 'record_id': row['id'], 'confirmed': True,
             'base': {**{key: row.get(key) for key in EDITABLE}, 'attachment_tokens': []},
         }
@@ -80,43 +82,75 @@ class TrackerTests(unittest.TestCase):
     def test_delete_requires_confirmation_and_refuses_stale_record(self):
         body = self.delete_request()
         with self.assertRaises(TrackerError) as error:
-            self.service.delete({**body, 'confirmed': False})
+            self.service.enqueue({**body, 'confirmed': False})
         self.assertEqual(error.exception.status, 400)
+        self.service.enqueue(body)
         self.client.rows['issue'][0]['note'] = '其他人在飞书修改了备注'
-        with self.assertRaises(TrackerError) as error:
-            self.service.delete(body)
-        self.assertEqual(error.exception.status, 409)
+        self.service.process_next()
+        result = self.service.snapshot()
+        self.assertEqual(result['sync']['jobs'][0]['status'], 409)
+        self.assertEqual(result['issues'][0]['note'], '其他人在飞书修改了备注')
         self.assertEqual(self.client.deletes, [])
 
     def test_delete_verifies_absence_after_timeout_and_is_idempotent(self):
         body = self.delete_request()
         self.client.rows['task'].append({**sample(body['record_id']), 'kind': 'task'})
         self.client.fail = 'delete-timeout'
-        result = self.service.delete(body)
-        self.assertEqual(result['snapshot']['issues'], [])
-        self.assertEqual(self.service.delete(body)['snapshot']['issues'], [])
+        self.service.enqueue(body)
+        self.service.process_next()
+        self.assertEqual(self.service.snapshot()['issues'], [])
+        self.service.enqueue(body)
+        self.assertFalse(self.service.process_next())
         self.assertEqual(self.client.deletes, [('issue', body['record_id'])])
         self.assertEqual(len(self.client.rows['task']), 1)
 
     def test_delete_permission_error_keeps_cached_record(self):
         body = self.delete_request()
         self.client.fail = 'delete-denied'
-        with self.assertRaises(TrackerError) as error:
-            self.service.delete(body)
-        self.assertEqual(error.exception.missing, ['base:record:delete'])
-        self.assertEqual(self.service.snapshot()['issues'][0]['id'], body['record_id'])
+        self.assertEqual(self.service.enqueue(body)['snapshot']['issues'], [])
+        self.service.process_next()
+        result = self.service.snapshot()
+        self.assertEqual(result['sync']['jobs'][0]['status'], 403)
+        self.assertEqual(result['issues'][0]['id'], body['record_id'])
+        self.client.fail = None
+        self.service.queue_control({'operation': 'retry', 'job_id': body['client_operation_id']})
+        self.service.process_next()
+        self.assertEqual(self.service.snapshot()['issues'], [])
 
     def test_delete_refuses_record_with_queued_changes(self):
         body = self.delete_request()
-        self.service._queue_autostart = False
         self.service.enqueue({
             **body, 'operation': 'update', 'client_operation_id': 'abc12345',
             'patch': {'note': '等待同步的备注'},
         })
         with self.assertRaises(TrackerError) as error:
-            self.service.delete(body)
+            self.service.enqueue(body)
         self.assertEqual(error.exception.status, 409)
         self.assertEqual(self.client.deletes, [])
+
+    def test_delete_accepts_locally_while_other_cloud_write_is_slow(self):
+        body = self.delete_request()
+        with self.service._write_lock, patch.object(self.client, 'list_kind', side_effect=AssertionError('入队不应读取飞书')):
+            # 用另一线程持有提交请求，复现工作线程正在写另一条记录。
+            with ThreadPoolExecutor(max_workers=1) as workers:
+                pending = workers.submit(self.service.enqueue, body)
+                self.assertEqual(pending.result(timeout=1)['snapshot']['issues'], [])
+        self.assertEqual(self.service.refresh()['issues'], [])
+        self.assertEqual(len(self.client.rows['issue']), 1)
+        with self.assertRaises(TrackerError):
+            self.service.enqueue({**body, 'operation': 'update', 'client_operation_id': 'abc12345', 'patch': {'note': '迟到的修改'}})
+        self.assertEqual(self.client.deletes, [])
+
+    def test_interrupted_delete_checks_fresh_rows_before_repeating_remote_delete(self):
+        body = self.delete_request()
+        self.service.enqueue(body)
+        self.service.outbox.claim()
+        self.client.delete('issue', body['record_id'])
+        resumed = TrackerService(self.client, self.service.root, queue_autostart=False)
+        self.assertEqual(resumed.snapshot()['issues'], [])
+        self.assertTrue(resumed.process_next())
+        self.assertEqual(resumed.snapshot()['sync']['jobs'], [])
+        self.assertEqual(self.client.deletes, [('issue', body['record_id'])])
 
     def test_real_column_order_does_not_decide_fields(self):
         issue_ids = [TABLES['issue']['fields'][name] for name in ('content','created','status','priority','due','note','tags')]

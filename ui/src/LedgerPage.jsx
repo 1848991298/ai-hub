@@ -330,7 +330,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setTagDraft('');
   }
   function confirmDelete(row) {
-    setEditor(current => ({ ...current, mode: 'delete', deleteBase: {
+    setEditor(current => ({ ...current, mode: 'delete', requestId: requestId(), deleteBase: {
       ...valuesOf(row), status: canonicalStatus(row.status),
       attachment_tokens: (row.attachments || []).map(image => image.file_token),
     } }));
@@ -342,13 +342,13 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setError('');
     setMessage('');
     try {
-      const result = await api('delete', {
+      const result = await api('enqueue', {
+        operation: 'delete', client_operation_id: editor.requestId,
         kind: editor.kind, record_id: editor.recordId, base: editor.deleteBase, confirmed: true,
       });
       acceptSnapshot(result.snapshot);
       closeEditor();
       if (recordId === editor.recordId) navigate?.({ kind, overdue: route.overdue });
-      setMessage('已从飞书删除记录。');
     } catch (reason) {
       setError(reason.message);
     } finally {
@@ -605,7 +605,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const synced = data?.synced_at ? new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未成功';
   const readError = Boolean(data?.error || (!data && error));
   const syncTone = failedJobs.length || readError ? 'is-error' : data?.sync?.pending ? 'is-pending' : data?.synced_at ? '' : 'is-idle';
-  const syncLabel = failedJobs.length ? `${failedJobs.length} 项修改待处理` : data?.sync?.pending ? `后台同步 ${data.sync.pending} 项` : readError ? '读取异常 · 保留上次记录' : data?.synced_at ? `已同步 · ${synced}` : loading ? '正在读取…' : '尚未成功读取';
+  const syncLabel = failedJobs.length ? `${failedJobs.length} 项同步待处理` : data?.sync?.pending ? `后台同步 ${data.sync.pending} 项` : readError ? '读取异常 · 保留上次记录' : data?.synced_at ? `已同步 · ${synced}` : loading ? '正在读取…' : '尚未成功读取';
   const syncHelp = '飞书是主数据。打开页面、手动刷新及服务运行期间定期读取。退出 Hub 后停止；截止时间只用于筛选，不会自动完成。';
   const editorLabel = editor?.kind === 'task' ? '任务' : '问题';
   const reading = editor?.mode === 'read';
@@ -695,12 +695,15 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     </header>
     {!editor && error && <div className="ledger-alert" role="alert">{error}{data?.missing_scopes?.length ? ` 缺少 ${data.missing_scopes.join('、')}。` : ''}</div>}
     {failedJobs.length > 0 && <section className="ledger-sync-errors" role="alert">
-      <header><strong>{failedJobs.length} 项修改尚未同步</strong><span>修改已保留，请重试或继续编辑。</span></header>
-      {failedJobs.map(job => <div className="ledger-sync-error" key={job.id}><div><strong>{job.title}</strong><p>{job.error}</p></div><div className="ledger-sync-error-actions">
-        {job.state === 'failed' && job.status !== 409 && <button type="button" onClick={() => syncAction(job, 'retry')}>{job.text_synced ? '重试截图' : '重试'}</button>}
-        {!job.text_synced && <button type="button" onClick={() => editFailed(job)}>{job.status === 409 ? '处理并继续编辑' : '继续编辑'}</button>}
-        <button type="button" onClick={() => syncAction(job, 'discard')}>{job.text_synced ? '放弃待传截图' : '撤销本机修改'}</button>
-      </div></div>)}
+      <header><strong>{failedJobs.length} 项同步待处理</strong><span>可按下方提示处理。</span></header>
+      {failedJobs.map(job => {
+        const deleting = job.operation === 'delete';
+        return <div className="ledger-sync-error" key={job.id}><div><strong>{deleting ? '删除待处理 · ' : ''}{job.title}</strong><p>{job.error}</p></div><div className="ledger-sync-error-actions">
+          {job.state === 'failed' && job.status !== 409 && <button type="button" onClick={() => syncAction(job, 'retry')}>{deleting ? '重试删除' : job.text_synced ? '重试截图' : '重试'}</button>}
+          {!deleting && !job.text_synced && <button type="button" onClick={() => editFailed(job)}>{job.status === 409 ? '处理并继续编辑' : '继续编辑'}</button>}
+          <button type="button" onClick={() => syncAction(job, 'discard')}>{deleting ? '取消删除请求' : job.text_synced ? '放弃待传截图' : '撤销本机修改'}</button>
+        </div></div>;
+      })}
     </section>}
     {message && <div className="ledger-ok" role="status">{message}</div>}
     {hint && <div className="ledger-archive-hint"><Archive size={15}/><span>已有 {completed.length} 条已完成记录，可归档后收起，随时恢复。</span><button type="button" onClick={() => setSelected(completed.slice(0,100).map(selectionKey))}>选择已完成记录</button><button type="button" aria-label="暂不提示归档" onClick={dismissArchiveHint}><X size={14}/></button></div>}
@@ -830,7 +833,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
           setEditor(current => ({ ...current, mode: 'read', focusNote: false }));
         }}>取消</button>
         <button type="button" className="ledger-delete-button" disabled={saving} onClick={deleteRecord}>
-          {saving ? '正在删除…' : '确认删除'}
+          {saving ? '正在提交…' : '确认删除'}
         </button>
       </footer>
     </RecordDrawer>}

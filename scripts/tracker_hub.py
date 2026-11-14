@@ -360,7 +360,7 @@ class TrackerService:
                 'category_options': list(CATEGORIES),
                 'attachment_fields': {kind: 'attachments' in table['fields'] for kind, table in TABLES.items()},
             }
-        jobs = self.outbox.jobs()
+            jobs = self.outbox.jobs()
         shown = []
         for row_list in rows.values():
             for row in row_list:
@@ -380,10 +380,15 @@ class TrackerService:
                 if not row:
                     row = dict(draft, id=record_id, kind=kind, created_at=None)
                     rows[kind].append(row)
-            else:
+            elif operation == 'update':
                 draft = {**body.get('base', {}), **body['patch']}
                 if row and not job['applied_record_id']:
                     row.update(body['patch'])
+            else:
+                draft = body['base']
+                if row and job['state'] in ('pending', 'writing'):
+                    rows[kind].remove(row)
+                    row = None
             if row:
                 row.update(sync_state=job['state'], sync_job_id=job['id'])
                 row['pending_images'] = row.get('pending_images', 0) + job['pending_images']
@@ -464,7 +469,9 @@ class TrackerService:
         operation, body = job['payload']['operation'], job['payload']['body']
         record_id = job['applied_record_id']
         try:
-            if record_id is None:
+            if operation == 'delete':
+                self._delete(body)
+            elif record_id is None:
                 if operation == 'create':
                     record_id = self.create(body)['record']['id']
                 else:
@@ -480,7 +487,8 @@ class TrackerService:
             self.outbox.finish(job['id'], state, str(error)[:400], error.status)
         except Exception:
             state = 'uncertain' if operation == 'create' and record_id is None else 'failed'
-            self.outbox.finish(job['id'], state, '本次同步结果未确认，修改已保留，请核对后继续。', 502)
+            message = '暂未核实删除结果，请重试核对。' if operation == 'delete' else '本次同步结果未确认，修改已保留，请核对后继续。'
+            self.outbox.finish(job['id'], state, message, 502)
         else:
             self.outbox.finish(job['id'])
         return True
@@ -547,7 +555,7 @@ class TrackerService:
             raise TrackerError('一次请选择 1–100 条记录。')
         items = []
         for item in operations:
-            if not isinstance(item, dict) or item.get('operation') not in ('create', 'update'):
+            if not isinstance(item, dict) or item.get('operation') not in ('create', 'update', 'delete'):
                 raise TrackerError('不支持的队列操作。')
             kind = self._kind(item)
             job_id = item.get('client_operation_id')
@@ -560,7 +568,12 @@ class TrackerService:
                 raise TrackerError('截图参数不合法，或单次超过 20 张。')
             if image_ids and 'attachments' not in TABLES[kind]['fields']:
                 raise TrackerError('飞书截图字段尚未配置。')
-            if item['operation'] == 'create':
+            if item['operation'] == 'delete':
+                if image_ids:
+                    raise TrackerError('删除记录不能同时上传截图。')
+                data = self._delete_request(item, kind)
+                target = kind + ':' + data['record_id']
+            elif item['operation'] == 'create':
                 form = self._clean_patch(kind, {key: item.get(key) for key in EDITABLE if key in item})
                 form.setdefault('status', '未启动')
                 if kind == 'task' and 'category' in TABLES[kind]['fields']:
@@ -581,15 +594,21 @@ class TrackerService:
             payload = {'operation': item['operation'], 'body': data}
             if image_ids:
                 payload['image_ids'] = list(dict.fromkeys(image_ids))
-            items.append({'id': job_id, 'target': target, 'payload': payload})
+            queued = {'id': job_id, 'target': target, 'payload': payload}
+            if item['operation'] == 'delete':
+                with self.lock:
+                    queued['create_targets'] = [
+                        kind + ':local-' + request_id for request_id, seen in self._seen.items()
+                        if seen['kind'] == kind and seen['record_id'] == data['record_id']
+                    ]
+            items.append(queued)
         supersedes = body.get('supersedes')
         if supersedes:
             old = self.outbox.get(supersedes)
             if old and old['state'] == 'uncertain' and body.get('confirmed_not_created') is not True:
                 raise TrackerError('新建结果未确认，请先核对飞书后再继续。', 409)
         try:
-            with self._write_lock:
-                self.outbox.enqueue(items, supersedes)
+            self.outbox.enqueue(items, supersedes)
         except ValueError as error:
             raise TrackerError(str(error), 409) from error
         if self._queue_autostart:
@@ -736,27 +755,31 @@ class TrackerService:
         with self._write_lock:
             return self._update(body)
 
-    def delete(self, body):
-        kind = self._kind(body)
+    def _delete_request(self, body, kind):
         record_id, baseline = body.get('record_id'), body.get('base')
         if not isinstance(record_id, str) or not RECORD_ID.fullmatch(record_id):
             raise TrackerError('缺少要删除的飞书记录。')
         if body.get('confirmed') is not True or not isinstance(baseline, dict) or not set(EDITABLE).issubset(baseline):
             raise TrackerError('请先核对并确认要删除的记录。')
+        tokens = baseline.get('attachment_tokens')
+        if not isinstance(tokens, list) or any(not isinstance(token, str) for token in tokens):
+            raise TrackerError('截图信息不完整，请重新打开后确认删除。')
+        return {'kind': kind, 'record_id': record_id,
+                'base': {**{key: baseline[key] for key in EDITABLE}, 'attachment_tokens': tokens}}
+
+    def _delete(self, body):
+        kind, record_id, baseline = body['kind'], body['record_id'], body['base']
         with self._write_lock, self._refresh_lock:
-            if any(job['payload']['body']['kind'] == kind and record_id in (
-                job['payload']['body'].get('record_id'), job['applied_record_id'],
-                self._seen.get(job['payload']['body'].get('client_request_id'), {}).get('record_id'),
-            ) for job in self.outbox.jobs()):
-                raise TrackerError('这条记录还有待同步的修改，请处理后再删除。', 409)
             rows = self.client.list_kind(kind, require_complete=True)
-            current = next((row for row in rows if row['id'] == record_id), None)
-            if current is not None:
+            try:
+                current = next((row for row in rows if row['id'] == record_id), None)
+                if current is None:
+                    return
                 attachments = [image['file_token'] for image in current.get('attachments', [])]
-                if attachments != baseline.get('attachment_tokens') or any(
+                if attachments != baseline['attachment_tokens'] or any(
                     not self._same(key, current.get(key), baseline[key]) for key in EDITABLE
                 ):
-                    raise TrackerError('这条记录在飞书已有新修改。请刷新后重新确认删除。', 409)
+                    raise TrackerError('这条记录在飞书已有新修改。请取消这次删除，核对最新内容后重新确认。', 409)
                 try:
                     self.client.delete(kind, record_id)
                 except TrackerError as error:
@@ -765,14 +788,13 @@ class TrackerService:
                 try:
                     rows = self.client.list_kind(kind, require_complete=True)
                 except TrackerError as error:
-                    raise TrackerError('删除结果暂未读回，请刷新后核对。', 502) from error
+                    raise TrackerError('删除结果暂未读回，请重试核对。', 502) from error
                 if any(row['id'] == record_id for row in rows):
-                    raise TrackerError('飞书仍返回这条记录，请刷新后核对。', 409)
-            # 仅在按 ID 确认飞书已无此记录后移除缓存。
-            with self.lock:
-                self.rows[kind] = rows
-                self.outbox.cache({'rows': self.rows, 'synced_at': self.synced_at})
-            return {'snapshot': self.snapshot()}
+                    raise TrackerError('飞书仍返回这条记录，请重试删除。', 502)
+            finally:
+                with self.lock:
+                    self.rows[kind] = rows
+                    self.outbox.cache({'rows': self.rows, 'synced_at': self.synced_at})
 
     def _update(self, body):
         kind = self._kind(body)
@@ -981,7 +1003,7 @@ def handle_tracker(handler, service, post=False):
             service.stage_image(handler.headers.get('X-Image-Id'), handler.headers.get('X-Image-Name'), data)
             handler.send_json({'staged': True}, 201)
             return
-        if action not in ('refresh', 'create', 'update', 'delete', 'enqueue', 'queue-control'):
+        if action not in ('refresh', 'create', 'update', 'enqueue', 'queue-control'):
             raise TrackerError('台账接口不存在。', 404)
         length = int(handler.headers.get('Content-Length', '0'))
         if not 0 <= length <= 1024 * 1024:
@@ -997,8 +1019,6 @@ def handle_tracker(handler, service, post=False):
             handler.send_json(service.enqueue(body), 202)
         elif action == 'queue-control':
             handler.send_json(service.queue_control(body))
-        elif action == 'delete':
-            handler.send_json(service.delete(body))
         else:
             result = service.create(body) if action == 'create' else service.update(body)
             handler.send_json(result)

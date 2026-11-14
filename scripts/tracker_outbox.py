@@ -31,9 +31,9 @@ class TrackerOutbox:
                 id TEXT PRIMARY KEY, job_id TEXT, name TEXT NOT NULL, mime TEXT NOT NULL,
                 data BLOB NOT NULL, created_at TEXT NOT NULL)''')
             db.execute('CREATE INDEX IF NOT EXISTS staged_images_job ON staged_images(job_id)')
-            # 更新可按目标值读回恢复；中断的新建不能盲目重发，避免重复记录。
+            # 更新和删除可读回核对；尚未拿到记录编号的新建不能盲目重发。
             db.execute("""UPDATE jobs SET state='pending' WHERE state='writing'
-                          AND (json_extract(payload,'$.operation')='update' OR applied_record_id IS NOT NULL)""")
+                          AND (json_extract(payload,'$.operation') IN ('update','delete') OR applied_record_id IS NOT NULL)""")
             db.execute("""UPDATE jobs SET state='uncertain', error='新建结果尚未确认，请先核对飞书，避免重复新建。', status=409
                           WHERE state='writing'""")
         os.chmod(self.path, 0o600)
@@ -85,6 +85,8 @@ class TrackerOutbox:
                 if old['applied_record_id']:
                     raise ValueError('文字已同步，请重试尚未同步的截图。')
                 old_payload = json.loads(old['payload'])
+                if old_payload['operation'] == 'delete' or any(item['payload']['operation'] == 'delete' for item in items):
+                    raise ValueError('请先取消之前的操作，再重新确认删除。')
                 same_create = len(items) == 1 and old_payload['operation'] == items[0]['payload']['operation'] == 'create' and old_payload['body']['kind'] == items[0]['payload']['body']['kind']
                 if len(items) != 1 or (old['target'] != items[0]['target'] and not same_create):
                     raise ValueError('只能替换同一条记录的失败修改。')
@@ -100,6 +102,21 @@ class TrackerOutbox:
                     if existing['payload'] != raw:
                         raise ValueError('这次操作编号已用于不同内容，请重新打开后保存。')
                     continue
+                operation = item['payload']['operation']
+                if operation == 'delete':
+                    body = item['payload']['body']
+                    targets = [item['target'], *item.get('create_targets', [])]
+                    placeholders = ','.join('?' for _ in targets)
+                    active = db.execute(f"""SELECT 1 FROM jobs WHERE state NOT IN ('done','discarded') AND
+                        (target IN ({placeholders}) OR
+                         (applied_record_id=? AND json_extract(payload,'$.body.kind')=?)) LIMIT 1""",
+                        (*targets, body['record_id'], body['kind'])).fetchone()
+                    if active:
+                        raise ValueError('这条记录还有待处理的同步操作，请处理后再删除。')
+                elif operation == 'update' and db.execute("""SELECT 1 FROM jobs WHERE target=?
+                    AND state NOT IN ('done','discarded') AND json_extract(payload,'$.operation')='delete' LIMIT 1""",
+                    (item['target'],)).fetchone():
+                    raise ValueError('这条记录有待处理的删除，请先处理删除请求。')
                 current = stamp()
                 db.execute('INSERT INTO jobs(id,target,payload,state,created_at,updated_at) VALUES (?,?,?,?,?,?)',
                            (item['id'], item['target'], raw, 'pending', current, current))
@@ -159,15 +176,15 @@ class TrackerOutbox:
 
     def retry(self, job_id):
         with self.connect() as db:
-            row = db.execute('SELECT state FROM jobs WHERE id=?', (job_id,)).fetchone()
-            if not row or row['state'] != 'failed':
+            changed = db.execute("""UPDATE jobs SET state='pending',error=NULL,status=NULL,updated_at=?
+                WHERE id=? AND state='failed'""", (stamp(), job_id))
+            if not changed.rowcount:
                 raise ValueError('这项操作不能直接重试，请先核对结果或继续编辑。')
-            db.execute("UPDATE jobs SET state='pending',error=NULL,status=NULL,updated_at=? WHERE id=?", (stamp(), job_id))
 
     def discard(self, job_id):
         with self.connect() as db:
-            row = db.execute('SELECT state FROM jobs WHERE id=?', (job_id,)).fetchone()
-            if not row or row['state'] not in ('failed', 'uncertain', 'pending'):
+            changed = db.execute("""UPDATE jobs SET state='discarded',updated_at=?
+                WHERE id=? AND state IN ('failed','uncertain','pending')""", (stamp(), job_id))
+            if not changed.rowcount:
                 raise ValueError('这项操作已经在写入或已完成，请刷新后核对。')
-            db.execute("UPDATE jobs SET state='discarded',updated_at=? WHERE id=?", (stamp(), job_id))
             db.execute('DELETE FROM staged_images WHERE job_id=?', (job_id,))

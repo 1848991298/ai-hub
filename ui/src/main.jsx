@@ -88,6 +88,7 @@ function App() {
   const [pins, setPins] = useState(() => storedPins(readStored('ai-hub-pinned-skills')));
   const [visits, setVisits] = useState(() => storedVisits(readStored('ai-hub-recent-projects')));
   const [attention, setAttention] = useState({ ready: false, ledger: null, market: null, rules: null });
+  const [deleteFailures, setDeleteFailures] = useState([]);
   const attentionRequest = useRef(0);
   const toastTimer = useRef();
   const searchInput = useRef();
@@ -175,6 +176,27 @@ function App() {
     document.addEventListener('visibilitychange', update);
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', update); };
   }, [page]);
+  useEffect(() => {
+    if (page === 'ledger') return;
+    let active = true;
+    let timer;
+    async function checkDeletes() {
+      let retry = true;
+      try {
+        const response = await fetch('/api/tracker/snapshot');
+        if (response.ok && active) {
+          const value = await response.json();
+          if (!active) return;
+          const jobs = (value.sync?.jobs || []).filter(job => job.operation === 'delete');
+          setDeleteFailures(jobs.filter(job => job.state === 'failed'));
+          retry = jobs.some(job => job.state === 'pending' || job.state === 'writing');
+        }
+      } catch { /* Local service may be restarting. */ }
+      if (active && retry) timer = setTimeout(checkDeletes, 2500);
+    }
+    checkDeletes();
+    return () => { active = false; clearTimeout(timer); };
+  }, [page]);
   function navigate(next, destination = {}) {
     const hash = routeHash(next, destination);
     if (location.hash !== hash) history.pushState(null, '', hash);
@@ -260,6 +282,11 @@ function App() {
           <main className="main-content">
             {!['market','ledger'].includes(page) && <div className="page-heading"><div><h1>{title}<span className="heading-dot">.</span></h1><p>{subtitle}</p></div><div className="heading-actions">{page === 'overview' ? <div className="overview-date"><span className="today">{fmtDate(clock)}<span>{clock.toLocaleDateString('zh-CN', {weekday:'long',timeZone:'Asia/Shanghai'})}</span></span><small>工作台快照 {fmtDate(data.generated_at)} {fmtTime(data.generated_at)}</small></div> : page === 'projects' ? <button className="button primary" onClick={() => setModal({ type: 'new-project' })}><Plus size={16} />添加工程</button> : page === 'skills' ? <button className="button primary" onClick={() => setModal({ type: 'new-skill' })}><Plus size={16} />新建技能草稿</button> : page === 'rules' ? null : page === 'usage' ? null : <button className="button" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : refresh()}><RefreshCw size={15} />重新检查</button>}</div></div>}
             {error && <div className="inline-error">{error}，当前展示上次读取的数据。</div>}
+            {page !== 'ledger' && deleteFailures.length > 0 && <div className="ledger-sync-errors" role="alert">
+              <header><strong>{deleteFailures.length} 条记录删除待处理</strong>
+                <button type="button" className="text-button" onClick={() => navigate('ledger')}>查看失败原因<ArrowRight size={14}/></button>
+              </header>
+            </div>}
             {page === 'ledger' && <LedgerPage sinkDone={layout.sinkDone} route={params} projects={data.projects} navigate={next => navigate('ledger', next)} />}
             {page === 'market' && <MarketPage route={params} navigate={next => navigate('market', next)} />}
             {page === 'usage' && <UsagePage onDiagnostics={() => setModal({ type: 'settings', diagnostics: true })} />}
