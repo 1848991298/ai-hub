@@ -22,6 +22,59 @@ async function api(action, body) {
   return value;
 }
 
+function FeishuAuthorization({ onClose, onAuthorized }) {
+  const dialog = useRef(null);
+  const titleId = useId();
+  const [attempt, setAttempt] = useState(0);
+  const [flow, setFlow] = useState(null);
+  const [failure, setFailure] = useState('');
+
+  useLayoutEffect(() => {
+    const element = dialog.current;
+    element.showModal();
+    return () => element.close();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let timer;
+    function handle(value) {
+      if (!active) return;
+      if (value.state === 'authorized') onAuthorized();
+      else if (value.state === 'waiting') {
+        if (value.qr_image) setFlow(value);
+        timer = setTimeout(() => api('auth-status').then(handle).catch(fail), 1500);
+      } else {
+        setFlow(null);
+        setFailure('授权未完成或二维码已过期，请重新生成。');
+      }
+    }
+    function fail(reason) {
+      if (!active) return;
+      setFlow(null);
+      setFailure(reason.message);
+    }
+    api('auth-start', {}).then(handle).catch(fail);
+    return () => { active = false; clearTimeout(timer); };
+  }, [attempt]);
+
+  return <dialog ref={dialog} className="ledger-dialog ledger-auth-dialog" aria-labelledby={titleId}
+    onCancel={event => { event.preventDefault(); onClose(); }}>
+    <header className="ledger-dialog-head">
+      <div><h2 id={titleId}>重新授权飞书</h2><p>授权后自动刷新「问题与任务」。</p></div>
+      <button type="button" className="ledger-close" aria-label="关闭授权弹窗" onClick={onClose}><X size={18}/></button>
+    </header>
+    {failure ? <div className="ledger-auth-content">
+      <p role="alert">{failure}</p>
+      <button type="button" className="button" onClick={() => { setFailure(''); setAttempt(attempt + 1); }}>重新生成二维码</button>
+    </div> : flow ? <div className="ledger-auth-content">
+      <img src={flow.qr_image} alt="飞书授权二维码" width="208" height="208"/>
+      <p role="status">用飞书扫码，选择当前账号并点「同意」。</p>
+      <a href={flow.verification_url} target="_blank" rel="noopener noreferrer">打开飞书授权页</a>
+    </div> : <p className="ledger-auth-content" role="status">正在获取授权二维码…</p>}
+  </dialog>;
+}
+
 function valuesOf(row) {
   return { content: row.content || '', status: canonicalStatus(row.status) || '未启动', due: row.due || '', priority: row.priority || '', note: row.note || '', tags: row.tags || [], archived: Boolean(row.archived), category: row.category || '' };
 }
@@ -174,6 +227,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('ai-hub-ledger-view') === 'board' ? 'board' : 'list');
   const [rowHeight, setRowHeight] = useState(() => savedValue('ai-hub-ledger-row-height') === 'auto' ? 'auto' : 'single');
@@ -228,11 +282,12 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setData(normalizeSnapshot(value));
     setError(value.error && !value.sync?.failed ? value.error : '');
   }
-  async function load(action = 'snapshot') {
+  async function load(action = 'snapshot', promptAuth = false) {
     const version = mutationClock.current, sequence = ++readSequence.current;
     setLoading(true);
     try {
       const value = await api(action, action === 'snapshot' ? undefined : {});
+      if (mounted.current && promptAuth && value.authorization_required) setAuthOpen(true);
       if (mounted.current && version === mutationClock.current && sequence === readSequence.current) {
         setData(normalizeSnapshot(value)); setError(value.error && !value.sync?.failed ? value.error : '');
       }
@@ -605,7 +660,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const synced = data?.synced_at ? new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未成功';
   const readError = Boolean(data?.error || (!data && error));
   const syncTone = failedJobs.length || readError ? 'is-error' : data?.sync?.pending ? 'is-pending' : data?.synced_at ? '' : 'is-idle';
-  const syncLabel = failedJobs.length ? `${failedJobs.length} 项同步待处理` : data?.sync?.pending ? `后台同步 ${data.sync.pending} 项` : readError ? '读取异常 · 保留上次记录' : data?.synced_at ? `已同步 · ${synced}` : loading ? '正在读取…' : '尚未成功读取';
+  const syncLabel = data?.authorization_required ? '飞书待授权 · 保留上次记录' : failedJobs.length ? `${failedJobs.length} 项同步待处理` : data?.sync?.pending ? `后台同步 ${data.sync.pending} 项` : readError ? '读取异常 · 保留上次记录' : data?.synced_at ? `已同步 · ${synced}` : loading ? '正在读取…' : '尚未成功读取';
   const syncHelp = '飞书是主数据。打开页面、手动刷新及服务运行期间定期读取。退出 Hub 后停止；截止时间只用于筛选，不会自动完成。';
   const editorLabel = editor?.kind === 'task' ? '任务' : '问题';
   const reading = editor?.mode === 'read';
@@ -689,11 +744,19 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       </div>
       <div className="ledger-actions">
         {data?.base_url && <a href={data.base_url} target="_blank" rel="noreferrer">打开飞书表格</a>}
-        <button type="button" onClick={() => load('refresh')} disabled={loading}><RefreshCw size={15}/>{loading ? '读取中…' : '立即刷新'}</button>
+        <button type="button" onClick={() => load('refresh', true)} disabled={loading}><RefreshCw size={15}/>{loading ? '读取中…' : '立即刷新'}</button>
         {(kind === 'all' ? ['issue', 'task'] : [kind]).map(target => <button type="button" className="ledger-primary" key={target} onClick={event => openCreate(target, event)}><Plus size={15}/>新增{target === 'issue' ? '问题' : '任务'}</button>)}
       </div>
     </header>
-    {!editor && error && <div className="ledger-alert" role="alert">{error}{data?.missing_scopes?.length ? ` 缺少 ${data.missing_scopes.join('、')}。` : ''}</div>}
+    {!editor && data?.authorization_required && <div className="ledger-alert ledger-auth-alert" role="alert">
+      <span>飞书授权已失效，重新授权后可同步最新记录。</span>
+      <button type="button" className="button" onClick={() => setAuthOpen(true)}>重新授权</button>
+    </div>}
+    {!editor && !data?.authorization_required && error && <div className="ledger-alert" role="alert">{error}{data?.missing_scopes?.length ? ` 缺少 ${data.missing_scopes.join('、')}。` : ''}</div>}
+    {authOpen && <FeishuAuthorization onClose={() => setAuthOpen(false)} onAuthorized={() => {
+      setAuthOpen(false);
+      load('refresh');
+    }}/>}
     {failedJobs.length > 0 && <section className="ledger-sync-errors" role="alert">
       <header><strong>{failedJobs.length} 项同步待处理</strong><span>可按下方提示处理。</span></header>
       {failedJobs.map(job => {

@@ -169,6 +169,12 @@
 .ledger-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}
 .ledger-dialog h2{margin:0;font-size:22px;letter-spacing:-.02em}
 .ledger-dialog-head p{margin:4px 0 0;color:var(--text-muted);font-size:13px}
+.ledger-auth-dialog{width:min(380px,calc(100% - 32px));border:1px solid var(--border)}
+.ledger-auth-dialog::backdrop{background:var(--modal-backdrop,rgba(20,30,46,.3))}
+.ledger-auth-content{display:grid;justify-items:center;gap:10px;text-align:center;padding:4px 0 6px}
+.ledger-auth-content img{display:block;background:#fff;border-radius:8px}
+.ledger-auth-content p{margin:0}
+.ledger-auth-alert{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .ledger-close{display:grid;place-items:center;width:34px;height:34px;padding:0;border:0;border-radius:10px;background:transparent;color:var(--text)}
 .ledger-close:hover{background:var(--surface-hover)}
 .ledger-form{display:grid;gap:14px}

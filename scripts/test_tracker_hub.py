@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """台账同步的内存验证：不调用飞书，不改两条真实模拟记录。"""
+import json
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
-from tracker_hub import EDITABLE, TABLES, TrackerError, TrackerService, LarkClient, normalize
+from tracker_hub import AUTH_REQUIRED, EDITABLE, TABLES, TrackerError, TrackerService, LarkClient, normalize
 
 
 class MemoryClient:
@@ -78,6 +80,44 @@ class TrackerTests(unittest.TestCase):
             'kind': 'issue', 'record_id': row['id'], 'confirmed': True,
             'base': {**{key: row.get(key) for key in EDITABLE}, 'attachment_tokens': []},
         }
+
+    def test_missing_user_authorization_is_distinct_from_network_failure(self):
+        def reject(*args, **kwargs):
+            return SimpleNamespace(returncode=3, stderr='', stdout=json.dumps({
+                'ok': False, 'error': {'message': 'need_user_authorization (user: fixture-user)'},
+            }))
+        self.service.client = LarkClient(runner=reject)
+        self.service.rows['issue'] = [sample()]
+        with patch('tracker_hub.BASE_TOKEN', 'fixture'):
+            snapshot = self.service.refresh()
+        self.assertTrue(snapshot['authorization_required'])
+        self.assertEqual(snapshot['error'], AUTH_REQUIRED)
+        self.assertEqual(snapshot['issues'][0]['id'], sample()['id'])
+        self.service.client = self.client
+        with patch.object(self.client, 'list_kind', side_effect=TrackerError('网络连接中断', 502)):
+            self.assertFalse(self.service.refresh()['authorization_required'])
+        self.assertFalse(self.service.refresh()['authorization_required'])
+
+    def test_authorization_prompt_reuses_active_flow_without_exposing_device_code(self):
+        started, finished = threading.Event(), threading.Event()
+        service = self.service
+        service.error = AUTH_REQUIRED
+        def finish(code, ttl):
+            started.set()
+            finished.wait(2)
+            return True
+        with patch.object(self.client, 'begin_authorization', create=True,
+                          return_value=('hidden-device-code', 600, {'qr_image': 'fixture'})) as begin, \
+             patch.object(self.client, 'finish_authorization', create=True, side_effect=finish):
+            try:
+                first = service.begin_authorization()
+                self.assertTrue(started.wait(1))
+                self.assertEqual(first, {'state': 'waiting', 'qr_image': 'fixture'})
+                self.assertEqual(service.begin_authorization(), first)
+                self.assertEqual(service.authorization_status(), {'state': 'waiting'})
+                begin.assert_called_once_with()
+            finally:
+                finished.set()
 
     def test_delete_requires_confirmation_and_refuses_stale_record(self):
         body = self.delete_request()

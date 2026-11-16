@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """问题与任务台账：飞书多维表格是主数据，Hub 服务存活期间轮询并写回。"""
+import base64
 import json
 import os
 from datetime import datetime
@@ -33,6 +34,8 @@ IMAGE_EXTENSIONS = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp
 IMAGE_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
 ATTACHMENT_TOKEN = re.compile(r'[A-Za-z0-9_-]{1,160}')
 RECORD_ID = re.compile(r'rec[A-Za-z0-9_-]{1,157}')
+AUTH_REQUIRED = '飞书授权已失效，请重新授权。'
+TRACKER_SCOPES = 'base:record:read base:record:create base:record:update base:record:delete'
 
 
 def canonical_status(value):
@@ -190,15 +193,52 @@ class LarkClient:
         if payload.get('ok') is False or completed.returncode not in (0, None):
             err = payload.get('error') if isinstance(payload.get('error'), dict) else {}
             missing = err.get('missing_scopes') or []
+            message = err.get('message') or '飞书暂时无法完成这次操作。'
+            if 'base:record:read' in missing or any(
+                str(value).split(' (', 1)[0] in ('need_user_authorization', 'token_missing', 'token_expired')
+                for value in (message, err.get('type'), err.get('subtype'))
+            ):
+                raise TrackerError(AUTH_REQUIRED, 401)
             if 'base:record:update' in missing:
                 raise TrackerError('当前授权不能修改飞书记录，缺少 base:record:update。输入已保留，完成授权后再保存。', 403, missing)
             if 'base:record:create' in missing:
                 raise TrackerError('当前授权不能新建飞书记录，缺少 base:record:create。输入已保留。', 403, missing)
             if 'base:record:delete' in missing:
                 raise TrackerError('当前授权不能删除飞书记录，缺少 base:record:delete。', 403, missing)
-            message = err.get('message') or '飞书暂时无法完成这次操作。'
             raise TrackerError(message, 502, missing)
         return payload
+
+    def begin_authorization(self):
+        def run(args, **options):
+            return self.runner(['lark-cli', 'auth', *args], capture_output=True, text=True, **options)
+
+        try:
+            result = run(['login', '--scope', TRACKER_SCOPES, '--no-wait', '--json'], timeout=20)
+            # CLI 可能在 JSON 前后输出说明，凭据只在本机进程间传递。
+            payload = next((json.loads(line) for line in result.stdout.splitlines()
+                            if line.lstrip().startswith('{')), {})
+            code, url, ttl = (payload.get(key) for key in ('device_code', 'verification_url', 'expires_in'))
+            parsed = urlsplit(url or '')
+            if (result.returncode or not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9._~+/=-]+', code)
+                    or parsed.scheme != 'https' or parsed.netloc not in ('accounts.feishu.cn', 'accounts.larksuite.com')
+                    or parsed.path != '/oauth/v1/device/verify' or not parsed.query
+                    or type(ttl) is not int or not 1 <= ttl <= 1200):
+                raise ValueError('unexpected device flow response')
+            with tempfile.TemporaryDirectory() as folder:
+                qr = run(['qrcode', url, '--output', 'authorization.png', '--size', '360'], cwd=folder, timeout=10)
+                if qr.returncode:
+                    raise ValueError('QR generation failed')
+                image = Path(folder, 'authorization.png').read_bytes()
+                if not image.startswith(b'\x89PNG\r\n\x1a\n'):
+                    raise ValueError('invalid QR image')
+        except (OSError, ValueError, AttributeError, TypeError, subprocess.TimeoutExpired) as error:
+            raise TrackerError('暂时无法生成飞书授权二维码，请重试。', 502) from error
+        return code, ttl, {'verification_url': url, 'qr_image': 'data:image/png;base64,' + base64.b64encode(image).decode('ascii')}
+
+    def finish_authorization(self, code, ttl):
+        result = self.runner(['lark-cli', 'auth', 'login', '--device-code', code, '--json'],
+                             capture_output=True, text=True, timeout=ttl)
+        return result.returncode == 0
 
     def list_kind(self, kind, *, require_complete=False):
         table_id = TABLES[kind]['id']
@@ -290,6 +330,8 @@ class TrackerService:
         self.lock = threading.Lock()
         self._write_lock = threading.RLock()
         self._refresh_lock = threading.Lock()
+        self._auth_lock = threading.Lock()
+        self._authorization = {'state': 'idle'}
         self.rows = {'issue': [], 'task': []}
         self.synced_at = None
         self.error = None
@@ -346,6 +388,7 @@ class TrackerService:
                 'interval_seconds': INTERVAL,
                 'synced_at': self.synced_at,
                 'error': self.error,
+                'authorization_required': self.error == AUTH_REQUIRED,
                 'missing_scopes': list(self.missing),
                 'polling': self.polling,
                 'mode': 'poll',
@@ -405,6 +448,30 @@ class TrackerService:
     def refresh(self):
         with self._refresh_lock:
             return self._refresh()
+
+    def begin_authorization(self):
+        with self._auth_lock:
+            if self.error != AUTH_REQUIRED:
+                return {'state': 'authorized'}
+            if self._authorization['state'] == 'waiting':
+                return dict(self._authorization)
+            code, ttl, display = self.client.begin_authorization()
+            self._authorization = {'state': 'waiting', **display}
+            threading.Thread(target=self._finish_authorization, args=(code, ttl),
+                             name='tracker-feishu-auth', daemon=True).start()
+            return dict(self._authorization)
+
+    def _finish_authorization(self, code, ttl):
+        try:
+            success = self.client.finish_authorization(code, ttl)
+        except (OSError, subprocess.TimeoutExpired):
+            success = False
+        with self._auth_lock:
+            self._authorization = {'state': 'authorized' if success else 'failed'}
+
+    def authorization_status(self):
+        with self._auth_lock:
+            return {'state': self._authorization['state']}
 
     def _refresh(self):
         try:
@@ -972,6 +1039,9 @@ def handle_tracker(handler, service, post=False):
     action = url.path[len('/api/tracker/'):]
     try:
         if not post:
+            if action == 'auth-status':
+                handler.send_json(service.authorization_status())
+                return
             if action == 'image':
                 query = parse_qs(url.query)
                 kind, record_id, token = (query.get(key, [''])[0] for key in ('kind', 'record', 'file'))
@@ -1003,13 +1073,18 @@ def handle_tracker(handler, service, post=False):
             service.stage_image(handler.headers.get('X-Image-Id'), handler.headers.get('X-Image-Name'), data)
             handler.send_json({'staged': True}, 201)
             return
-        if action not in ('refresh', 'create', 'update', 'enqueue', 'queue-control'):
+        if action not in ('refresh', 'auth-start', 'create', 'update', 'enqueue', 'queue-control'):
             raise TrackerError('台账接口不存在。', 404)
         length = int(handler.headers.get('Content-Length', '0'))
         if not 0 <= length <= 1024 * 1024:
             raise TrackerError('请求过大或为空。')
         raw = handler.rfile.read(length)
         body = json.loads(raw or b'{}')
+        if action == 'auth-start':
+            if body != {}:
+                raise TrackerError('授权入口不接受自定义参数。')
+            handler.send_json(service.begin_authorization())
+            return
         if action == 'refresh':
             if body not in ({}, None):
                 raise TrackerError('刷新不接受其他参数。')
