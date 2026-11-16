@@ -179,6 +179,12 @@
 .ledger-close:hover{background:var(--surface-hover)}
 .ledger-form{display:grid;gap:14px}
 .ledger-form label{display:grid;gap:6px;color:var(--text-secondary);font-size:13px;font-weight:650}
+.ledger-due-editor{display:grid;align-self:start;min-width:0;gap:6px}
+.ledger-due-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--text-secondary);font-size:13px;font-weight:650}
+.ledger-due-heading label{display:flex;align-items:baseline;white-space:nowrap}
+.ledger-due-heading small{color:var(--text-muted);font-weight:400}
+.ledger-due-editor .text-button{font-size:12px}
+.ledger-due-empty{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--text-muted)}
 .ledger-form input,.ledger-form textarea,.ledger-form select,.ledger-readonly{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--canvas);color:var(--text);font:inherit;font-weight:500}
 .ledger-form textarea{resize:vertical;line-height:1.6}
 .ledger-form input:focus,.ledger-form textarea:focus,.ledger-form select:focus{outline:2px solid var(--accent);outline-offset:1px}

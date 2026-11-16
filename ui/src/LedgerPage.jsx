@@ -75,6 +75,28 @@ function FeishuAuthorization({ onClose, onAuthorized }) {
   </dialog>;
 }
 
+function DueDateField({ value, onChange }) {
+  const fieldId = useId();
+  const [choosing, setChoosing] = useState(false);
+  const showDate = choosing || Boolean(value);
+  return <div className="ledger-due-editor">
+    <div className="ledger-due-heading">
+      {showDate ? <label htmlFor={fieldId}>截止日期 <small>选填</small></label>
+        : <span>截止日期 <small>选填</small></span>}
+      {showDate && <button type="button" className="text-button" onClick={() => {
+        onChange('');
+        setChoosing(false);
+      }}>{value ? '清空截止日期' : '暂不设置'}</button>}
+    </div>
+    {showDate ? <input id={fieldId} type="date" value={value} autoFocus={choosing}
+      onChange={event => onChange(event.target.value)}/>
+      : <div className="ledger-readonly ledger-due-empty">
+        <span>暂不设置</span>
+        <button type="button" className="text-button" onClick={() => setChoosing(true)}>设置日期</button>
+      </div>}
+  </div>;
+}
+
 function valuesOf(row) {
   return { content: row.content || '', status: canonicalStatus(row.status) || '未启动', due: row.due || '', priority: row.priority || '', note: row.note || '', tags: row.tags || [], archived: Boolean(row.archived), category: row.category || '' };
 }
@@ -934,7 +956,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
           <label>状态<span className="ledger-choice" role="radiogroup" aria-label="状态">{statuses.map(item => <button type="button" role="radio" aria-checked={editor.form.status === item} className={editor.form.status === item ? 'selected' : ''} key={item} onClick={() => change('status', item)}>{item}</button>)}</span></label>
           <label>优先级<span className="ledger-choice" role="radiogroup" aria-label="优先级"><button type="button" role="radio" aria-checked={!editor.form.priority} className={editor.form.priority ? '' : 'selected'} onClick={() => change('priority', '')}>不设置</button>{priorities.map(item => <button type="button" role="radio" aria-checked={editor.form.priority === item} className={editor.form.priority === item ? 'selected' : ''} key={item} onClick={() => change('priority', item)}>{item}</button>)}</span></label>
           {editor.kind === 'task' && supportsCategory && <div className="ledger-category-editor"><span>类型</span><div className="ledger-choice" role="radiogroup" aria-label="任务类型">{taskCategories.map(value => <button type="button" role="radio" key={value} aria-label={value} aria-checked={editor.form.category === value} className={editor.form.category === value ? 'selected' : ''} onClick={() => change('category', value)}>{value}</button>)}</div>{!editor.form.category && <small>这条历史记录尚未分类，可选择后保存。</small>}</div>}
-          <label>截止时间<input type="date" value={editor.form.due} onChange={event => change('due', event.target.value)} /></label>
+          <DueDateField key={editor.requestId} value={editor.form.due} onChange={value => change('due', value)}/>
           {supportsTags(editor.kind) && <div className="ledger-tag-editor"><span className="ledger-tag-label">模块标签<small>可多选</small></span><div className="ledger-tag-options" role="group" aria-label="模块标签">{tagOptions.length ? tagOptions.map(tag => { const selected = hasTag(editor.form.tags, tag); return <button type="button" key={tag} aria-label={tag} aria-pressed={selected} onClick={() => toggleTag(tag)}>{selected && <Check size={14} aria-hidden="true"/>}{tag}</button>; }) : <p>暂无模块标签，可在下方添加。</p>}</div><div className="ledger-new-tag"><input aria-label="新标签" maxLength={16} value={tagDraft} placeholder="添加模块标签，例如 app" onChange={event => setTagDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') addTag(event); }} /><button type="button" disabled={!tagDraft.trim()} onClick={addTag}>添加</button></div><p className="ledger-tag-help">输入新标签后直接保存也会加入；同名标签自动复用。</p></div>}
           <label>创建时间<div className="ledger-readonly">{recordForEditor?.created_at || '由飞书生成'}</div></label>
         </div>
