@@ -53,6 +53,24 @@ export function useRecordPreview() {
     };
   }, [preview, dismiss]);
 
+  useLayoutEffect(() => {
+    if (!preview) return;
+    const element = card.current;
+    const rect = preview.anchor.getBoundingClientRect();
+    const margin = 16;
+    const gap = 4;
+    const below = window.innerHeight - rect.bottom - gap - margin;
+    const above = rect.top - gap - margin;
+    const placeAbove = element.offsetHeight > below && above > below;
+    const width = element.offsetWidth;
+    const preferredLeft = Math.max(margin, rect.left, preview.x - width + margin);
+    element.style.left = `${Math.min(preferredLeft, window.innerWidth - width - margin)}px`;
+    element.style.top = placeAbove ? 'auto' : `${rect.bottom + gap}px`;
+    element.style.bottom = placeAbove ? `${window.innerHeight - rect.top + gap}px` : 'auto';
+    element.style.setProperty('--ledger-preview-height', `${Math.max(0, placeAbove ? above : below)}px`);
+    element.classList.toggle('is-above', placeAbove);
+  }, [preview]);
+
   function leave() {
     clearTimeout(timer.current);
     if (preview) timer.current = setTimeout(dismiss, 100);
@@ -70,21 +88,7 @@ export function useRecordPreview() {
         const x = event.clientX;
         timer.current = setTimeout(() => {
           if (!anchor.isConnected || !anchor.matches(':hover')) return;
-          const rect = anchor.getBoundingClientRect();
-          const margin = 12;
-          const gap = 4;
-          const width = Math.min(420, window.innerWidth - margin * 2);
-          const below = window.innerHeight - rect.bottom - margin - gap;
-          const above = rect.top - margin - gap;
-          const placeAbove = below < 180 && above > below;
-          const left = Math.min(window.innerWidth - width - margin, Math.max(margin, rect.left, x - width + 24));
-          setPreview({
-            anchor, text, label, placeAbove,
-            position: {
-              left, width, '--ledger-preview-height': `${Math.min(272, placeAbove ? above : below)}px`,
-              ...(placeAbove ? { bottom: window.innerHeight - rect.top + gap } : { top: rect.bottom + gap }),
-            },
-          });
+          setPreview({ anchor, text, label, x });
         }, 180);
       },
       onPointerLeave: leave,
@@ -92,8 +96,7 @@ export function useRecordPreview() {
   }
 
   const popup = preview && createPortal(
-    <div ref={card} className={`ledger-text-preview${preview.placeAbove ? ' is-above' : ''}`}
-      style={preview.position} aria-hidden="true"
+    <div ref={card} className="ledger-text-preview" aria-hidden="true"
       onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={leave}>
       <div className="ledger-text-preview-content">
         <strong>{preview.label}</strong>

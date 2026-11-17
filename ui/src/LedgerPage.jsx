@@ -161,6 +161,58 @@ function Pill({ tone, mode, onClick, children }) {
   return <button type="button" className={className} aria-pressed={mode === 'include' ? 'true' : mode === 'exclude' ? 'mixed' : 'false'} onClick={event => { event.stopPropagation(); onClick(); }}>{children}</button>;
 }
 
+function LedgerTagCell({ tags, filters, onFilter, onManage }) {
+  const cell = useRef(null);
+  const measure = useRef(null);
+  const [fit, setFit] = useState({ count: 0, compactAdd: false });
+  const digits = String(tags.length).length;
+
+  useLayoutEffect(() => {
+    if (!tags.length) return;
+    const container = cell.current;
+    const ruler = measure.current;
+    function update() {
+      const available = container.getBoundingClientRect().width;
+      const gap = parseFloat(getComputedStyle(container).columnGap) || 0;
+      const widths = Array.from(ruler.children, item => item.getBoundingClientRect().width);
+      const addWidth = widths[tags.length];
+      let count = tags.length;
+      let used = widths.slice(0, count).reduce((sum, width) => sum + width, 0) + gap * (count - 1);
+      const compactAdd = used <= available && used + gap + addWidth > available;
+      if (used > available) {
+        do {
+          count--;
+          used -= widths[count] + (count > 0 ? gap : 0);
+          const moreWidth = widths[tags.length + String(tags.length - count).length];
+          if (used + (count > 0 ? gap : 0) + moreWidth <= available) break;
+        } while (count > 0);
+      }
+      setFit(current => current.count === count && current.compactAdd === compactAdd
+        ? current : { count, compactAdd });
+    }
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    observer.observe(ruler);
+    return () => observer.disconnect();
+  }, [tags]);
+
+  const hidden = Math.max(0, tags.length - fit.count);
+  const compactAdd = tags.length > 0 && !hidden && fit.compactAdd;
+  return <div className="ledger-tag-cell" ref={cell}>
+    {tags.slice(0, fit.count).map(tag => <Pill key={tag} tone="is-tag" mode={filters?.[tag]}
+      onClick={() => onFilter(tag)}><span title={tag}>{tag}</span></Pill>)}
+    <button type="button" className={'ledger-tag-more' + (compactAdd ? ' is-compact-add' : '')}
+      aria-label={hidden ? '查看全部标签' : '添加标签'} title={hidden ? tags.join('、') : '添加标签'}
+      onClick={onManage}>{hidden ? '+' + hidden : <Plus size={14} aria-hidden="true"/>}</button>
+    {!!tags.length && <div className="ledger-tag-measure" ref={measure} aria-hidden="true">
+      {tags.map(tag => <Pill key={tag} tone="is-tag"><span>{tag}</span></Pill>)}
+      <span className="ledger-tag-more"><Plus size={14}/></span>
+      {Array.from({ length: digits }, (_, index) => <span key={index} className="ledger-tag-more">{'+' + '0'.repeat(index + 1)}</span>)}
+    </div>}
+  </div>;
+}
+
 function SortHeader({ column, label, sort, onSort }) {
   const index = sort.findIndex(rule => rule.key === column);
   const rule = sort[index];
@@ -738,14 +790,12 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         </div>
       </td>;
       case 'tags': if (!supportsTags(row.kind)) return <td key={key}>—</td>; return <td key={key}>
-        <div className="ledger-tag-cell">
-          {tags.length > 0 && <Pill tone="is-tag" mode={(filters.tags || {})[tags[0]]} onClick={() => setFacet('tags', tags[0])}><span title={tags[0]}>{tags[0]}</span></Pill>}
-          <button type="button" className="ledger-tag-more" aria-label={tags.length > 1 ? '查看全部标签' : '添加标签'} title={tags.length > 1 ? tags.join('、') : '添加标签'} onClick={event => {
+        <LedgerTagCell tags={tags} filters={filters.tags} onFilter={tag => setFacet('tags', tag)}
+          onManage={event => {
             setRowTag('');
             tagCommit.current = false;
             openFloat(event, { title: '标签', rowId: row.id, text: rowTagText(row) });
-          }}>{tags.length > 1 ? `+${tags.length - 1}` : <Plus size={14}/>}</button>
-        </div>
+          }}/>
       </td>;
       case 'category': return <td key={key}>{row.kind !== 'issue' && !row.category
         ? <button type="button" className="ledger-empty-value" title="未分类 · 点击筛选" aria-label="筛选未分类" aria-pressed={pressedMode(filters.category?.['未分类'])} onClick={event => { event.stopPropagation(); setFacet('category', '未分类'); }}>—</button>
@@ -814,7 +864,15 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       </div>
       <div className="ledger-toolbar-group ledger-toolbar-actions">
         <span className="ledger-result-count" aria-live="polite">{data ? <><strong>{visible.length}</strong>{visible.length !== rows.length ? ` / ${rows.length}` : ""} 条记录</> : '读取中…'}</span>
-        <select className="ledger-archive-scope" aria-label="记录范围" value={archiveMode} onChange={event => { setArchiveMode(event.target.value); setSelected([]); }}><option value="active">当前记录</option><option value="archived">已归档 {archivedCount}</option><option value="all">全部（含归档）</option></select>
+        <div className="ledger-tabs ledger-archive-scope" role="group" aria-label="记录范围">
+          {[['active', '当前记录'], ['archived', '已归档'], ['all', '全部（含归档）']].map(([id, label]) => (
+            <button type="button" key={id} aria-pressed={archiveMode === id} className={archiveMode === id ? 'selected' : ''}
+              onClick={() => { if (archiveMode !== id) { setArchiveMode(id); setSelected([]); } }}>
+              {id === 'archived' && <Archive size={14} aria-hidden="true"/>}
+              {label}{id === 'archived' && data && <> <em>{archivedCount}</em></>}
+            </button>
+          ))}
+        </div>
         <LedgerMenu label="视图设置" triggerLabel="视图" icon={SlidersHorizontal} align="end" width={340} chevron>{close => <div className="ledger-view-panel">
           <h3>显示方式</h3><div className="ledger-tabs" role="group" aria-label="视图"><button type="button" aria-pressed={view === 'list'} className={view === 'list' ? 'selected' : ''} onClick={() => { chooseView('list'); close(); }}>列表</button><button type="button" aria-pressed={view === 'board'} className={view === 'board' ? 'selected' : ''} onClick={() => { chooseView('board'); close(); }}>看板</button></div>
           {view === 'list' && <>
