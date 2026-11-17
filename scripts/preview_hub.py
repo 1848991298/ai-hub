@@ -243,7 +243,11 @@ def snapshot():
     for line in (ROOT / 'manifest.tsv').read_text().splitlines():
         if not line.startswith('canonical\t'):
             continue
-        _, name, origin, category, icon = (line.split('\t') + ['', ''])[:5]
+        fields = line.split('\t', 9)
+        fields.extend([''] * (10 - len(fields)))
+        _, name, origin, category, icon, ownership, author, upstream, license_id, guide = fields
+        ownership = ownership if ownership in {'personal', 'third-party'} else ''
+        upstream = upstream if upstream.startswith('https://') else ''
         category, icon = category or '其他', icon or 'file'
         path = ROOT / 'skills' / name / 'SKILL.md'
         text = path.read_text()
@@ -258,6 +262,7 @@ def snapshot():
             mappings.append(dict(client=client, path=str(target),
                                  mapped=target.is_symlink() and target.resolve() == path.parent.resolve()))
         skills.append(dict(id=name, title=title, category=category, icon=icon, origin=origin,
+                           ownership=ownership, author=author, upstream=upstream, license=license_id, guide=guide,
                            description=description, body=body.strip(), source=text, path=str(path),
                            modified=modified(path), mappings=mappings))
     rule_path = ROOT / 'rules/global.md'

@@ -20,6 +20,9 @@ button,input,textarea{font-family:inherit}code,kbd,pre,.branch-value,.editor-con
 .attention{margin-bottom:8px}.overview-empty{margin:0 0 22px}.attention-list{display:flex;flex-direction:column;margin:0 0 22px;border:1px solid var(--border);border-radius:13px;overflow:hidden;background:var(--surface)}
 .attention-list>button{display:flex;align-items:center;gap:16px;width:100%;padding:14px 16px;text-align:left;border-bottom:1px solid var(--border);color:var(--text)}
 .attention-list>button:last-child{border-bottom:0}.attention-list>button>span{display:flex;flex:1;flex-direction:column;gap:3px;min-width:0}.attention-list small{color:var(--text-muted);font-size:var(--text-xs)}
+.skill-meta{display:flex;align-items:center;gap:6px;margin-top:4px;min-width:0}
+.skill-meta code{margin-top:0;min-width:0}
+.skill-upstream{margin-bottom:8px}
 .skill-row-wrap{display:flex;align-items:center;min-width:0}.skill-row-wrap>.skill-row{flex:1;min-width:0;border-bottom:0}.skills-list .skill-row-wrap{border-bottom:1px solid var(--border)}
 .pin-skill{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;color:var(--text-muted);flex-shrink:0}.pin-skill.is-on{color:var(--accent)}.list-labels{padding-right:34px}
 .page-heading h1{font-size:28px;font-weight:600}.page-heading{margin-bottom:26px}.page-heading p{font-size:var(--text-base)}.heading-actions .button{font-size:var(--text-sm)}
@@ -55,16 +58,30 @@ button,input,textarea{font-family:inherit}code,kbd,pre,.branch-value,.editor-con
 /* 提高全局导航阅读清晰度，保留用户已有的字号设置。 */
 .app{font-weight:500}.app .nav-item{font-weight:600}.app .nav-group,.app .breadcrumb{color:var(--text-secondary);font-weight:550}.app .nav-group{font-size:max(13px,var(--text-xs))}
 
-/* 技能页顶部的读取端：三个客户端目录与映射数。 */
+/* Skills 的读取目录、命令与列表。 */
 .client-dots{width:70px}.list-labels>span:last-child{width:70px}
-.reader-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:22px}
-.reader-strip>button{display:flex;align-items:center;gap:10px;min-width:0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface);text-align:left;color:var(--text-secondary)}
-.reader-strip>button:hover{border-color:var(--accent)}
-.reader-strip>button>span:not(.badge){flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.reader-strip strong{color:var(--text);font-weight:600}
-.reader-strip .badge{flex:none;white-space:nowrap;margin:0}
-.reader-strip code{font-size:var(--text-xs);color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@container(max-width:650px){.reader-strip{grid-template-columns:1fr}}
+.reader-strip{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;margin-bottom:20px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.reader-strip>.button{flex:none}
+.reader-statuses{display:flex;align-items:center;flex-wrap:wrap;gap:12px 24px;min-width:0;margin:0;padding:0;list-style:none}
+.reader-statuses li{display:flex;align-items:center;gap:8px;min-width:0;color:var(--text-secondary)}
+.reader-statuses li>svg,.reader-statuses .badge{flex:none}
+.reader-name{display:flex;flex-direction:column;gap:2px;min-width:0}
+.reader-name strong{font-weight:600;color:var(--text)}
+.reader-name code{font-size:var(--text-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.skill-ownership.badge{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}
+.skill-invocation{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+.skill-invocation code{max-width:100%;overflow-wrap:anywhere;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface-subtle);color:var(--text)}
+.skill-invocation .button{min-height:32px;padding:4px 8px}
+.skills-page .source-note{color:var(--text-secondary)}
+.skills-page{--skill-name-width:min(46cqi,480px)}
+.skills-page .skill-row{display:grid;grid-template-columns:38px minmax(0,var(--skill-name-width)) 74px 70px minmax(15px,1fr);gap:12px}
+.skills-page .row-chevron{justify-self:end}
+.skills-page .list-labels{display:grid;grid-template-columns:calc(50px + var(--skill-name-width)) 74px 70px;gap:12px;padding-left:0}
+@container(max-width:760px){.reader-strip{flex-wrap:wrap}.reader-statuses{width:100%}}
+@container(max-width:650px){
+  .skills-page .skill-row{grid-template-columns:38px minmax(0,1fr) 70px 15px}
+  .skills-page .list-labels{grid-template-columns:minmax(0,1fr) 70px;padding-right:61px}
+}
 .settings-profile,.settings-status{display:grid;gap:10px;margin:18px 0}
 .settings-profile h3,.settings-status h3{margin:0}
 .settings-profile label{display:grid;gap:4px;font-size:13px;color:var(--text-secondary)}

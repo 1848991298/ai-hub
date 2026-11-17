@@ -54,12 +54,22 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(data['skills'][0]['description'], '一个测试技能')
         self.assertEqual(len(data['skills'][0]['mappings']), 3)
         self.assertEqual((data['skills'][0]['title'], data['skills'][0]['category']), ('正文', '其他'))
+        self.assertEqual(data['skills'][0]['ownership'], '')
 
     def test_skill_category_comes_from_manifest(self):
         (self.root / 'manifest.tsv').write_text('canonical\texample\ttest\t工程协作\tgit\n')
         with patch.object(preview, 'git', return_value=''):
             skill = preview.snapshot()['skills'][0]
         self.assertEqual((skill['category'], skill['icon']), ('工程协作', 'git'))
+
+    def test_skill_provenance_and_guide_come_from_manifest(self):
+        source = 'https://github.com/example/skill/tree/123/skills/example'
+        fields = ['canonical', 'example', 'example/skill', '界面设计', 'palette',
+                  'third-party', '示例作者', source, 'CC BY 4.0', '用来优化页面']
+        (self.root / 'manifest.tsv').write_text('\t'.join(fields) + '\n')
+        with patch.object(preview, 'git', return_value=''):
+            skill = preview.snapshot()['skills'][0]
+        self.assertEqual([skill[key] for key in ('ownership', 'author', 'upstream', 'license', 'guide')], fields[5:])
 
     def test_profile_uses_system_name_until_saved(self):
         with patch.object(preview, 'system_name', return_value='Leo'):

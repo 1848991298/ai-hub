@@ -1,5 +1,5 @@
-# status	name	origin
-# 公开版仅预装已审核的通用技能，不包含作者个人技能配置。新增时登记：
-# canonical<TAB>技能名称<TAB>来源说明
-canonical	commit-by-business	generic-public
-canonical	git-worktree-audit	generic-public
+# status	name	origin	category	icon	ownership	author	upstream	license	guide
+# 前三列必填，其余可留空。ownership 可填 personal（自建）或 third-party（第三方）。
+# 第三方技能可补充作者、上游固定版本的 HTTPS 链接、许可和中文用法。
+canonical	commit-by-business	generic-public	工程协作	git	personal	leowang			按业务整理和拆分 Git 提交，确认文件范围与提交说明后执行。
+canonical	git-worktree-audit	generic-public	工程协作	git	personal	leowang			盘点分支、工作区与未提交改动，查看同步和清理建议。
