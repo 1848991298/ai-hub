@@ -76,7 +76,10 @@ function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [route, setRoute] = useState(currentRoute);
-  const { page, params } = route;
+  const settingsOpen = route.page === 'settings';
+  const workspaceRoute = useRef(settingsOpen ? { page: 'overview', params: {} } : route);
+  if (!settingsOpen) workspaceRoute.current = route;
+  const { page, params } = workspaceRoute.current;
   const [clock, setClock] = useState(() => new Date());
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('全部技能');
@@ -168,9 +171,10 @@ function App() {
   useEffect(() => { const update = () => setDrafts(readResourceDrafts()); addEventListener('ai-hub-drafts-changed', update); return () => removeEventListener('ai-hub-drafts-changed', update); }, []);
   useEffect(() => {
     function readLocation() {
+      const next = currentRoute();
       setModal(null);
-      setRoute(currentRoute());
-      setQuery('');
+      setRoute(next);
+      if (next.page !== 'settings' && next.page !== workspaceRoute.current.page) setQuery('');
       setMobileNav(false);
     }
     addEventListener('hashchange', readLocation);
@@ -185,7 +189,7 @@ function App() {
     }
     addEventListener('keydown', keydown);
     return () => removeEventListener('keydown', keydown);
-  }, [modal]);
+  }, [modal, settingsOpen]);
   useEffect(() => {
     if (page !== 'overview') return;
     function update() {
@@ -221,11 +225,22 @@ function App() {
   }, [page]);
   function navigate(next, destination = {}) {
     const hash = routeHash(next, destination);
-    if (location.hash !== hash) history.pushState(null, '', hash);
+    if (location.hash !== hash) {
+      if (next === 'settings' && settingsOpen) history.replaceState(history.state, '', hash);
+      else history.pushState(next === 'settings' ? { hubSettings: true } : null, '', hash);
+    }
     setRoute({ page: next, params: destination });
-    setQuery('');
+    if (next !== 'settings') setQuery('');
     setMobileNav(false);
     if (destination.resource) setInspector(true);
+  }
+  function closeSettings() {
+    if (history.state?.hubSettings) history.back();
+    else {
+      const previous = workspaceRoute.current;
+      history.replaceState(null, '', routeHash(previous.page, previous.params));
+      setRoute(previous);
+    }
   }
   function toggleModule(id) {
     setHiddenModules(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
@@ -303,7 +318,7 @@ function App() {
   const navGroups = [...new Set(pages.map(item => item.group))].map(group => [
     group, pages.filter(item => item.group === group && !hiddenModules.includes(item.id)),
   ]);
-  return <div className={`app ${compact ? 'compact' : ''} ${motion ? '' : 'hub-reduced-motion'}`} style={{'--sidebar-width':layout.sidebarSpan+'px','--inspector-width':layout.inspectorWidth+'px','--ui-font-size':layout.fontSize+'px'}}><RulesSync page={page}/>
+  return <div className={`app ${compact ? 'compact' : ''} ${motion ? '' : 'hub-reduced-motion'}`} style={{'--sidebar-width':layout.sidebarSpan+'px','--inspector-width':layout.inspectorWidth+'px','--ui-font-size':layout.fontSize+'px'}}><RulesSync page={route.page}/>
     <aside id="workspace-sidebar" className={`sidebar ${mobileNav ? 'mobile-open' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="hub-brand-row">
         <button type="button" className="brand" aria-label="AI Hub 工作台" title="返回工作台" onClick={() => navigate('overview')}>
@@ -326,8 +341,8 @@ function App() {
       <div className="sidebar-bottom">
         {drafts.length > 0 && <button className="nav-item" aria-label="资源草稿箱" title={collapsed ? '资源草稿箱' : undefined} onClick={() => setModal({ type: 'drafts' })}><PencilLine size={17} /><span className="nav-label">资源草稿箱</span><span className="nav-count">{drafts.length}</span></button>}
         <div className="hub-sidebar-controls">
-          <button type="button" className={'nav-item hub-settings-link' + (page === 'settings' ? ' active' : '')}
-            aria-current={page === 'settings' ? 'page' : undefined} aria-label="工作台设置" title="工作台设置"
+          <button type="button" className={'nav-item hub-settings-link' + (settingsOpen ? ' active' : '')}
+            aria-current={settingsOpen ? 'page' : undefined} aria-label="工作台设置" title="工作台设置"
             onClick={() => navigate('settings', { section: 'general' })}>
             <Settings2 size={17} strokeWidth={1.5}/><span className="nav-label">设置</span>
           </button>
@@ -344,7 +359,7 @@ function App() {
           <strong className="hub-breadcrumb-label">{title}</strong>
         </div>
         <QuickFind data={data} error={error} ledger={attention.ledger} onPick={navigate}
-          pages={[...pages, { id: 'settings', label: '工作台设置' }]} disabled={Boolean(modal)}/>
+          pages={[...pages, { id: 'settings', label: '工作台设置' }]} disabled={Boolean(modal) || settingsOpen}/>
         <div className="hub-topbar-status" ref={setSyncAnchor}>
           {(page !== 'ledger' || !data) && <WorkspaceStatus key={page} title="工作台数据"
             status={loading || (!data && !error) ? '正在读取' : error ? '读取异常' : '本地已就绪'}
@@ -362,17 +377,14 @@ function App() {
       </header>
       {!data ? <div className="loading-page">{error ? <><HardDrive size={30} /><h2>本地服务尚未连接</h2><p>{error}</p><button className="button primary" onClick={() => refresh(false)}>重新连接</button></> : <><LoaderCircle className="spin" size={25} /><p>正在整理你的工作空间…</p></>}</div> : <>
         <div className={`workspace-body ${showInspector ? 'with-inspector' : ''}`}>
-          <main className={'main-content' + (page === 'skills' ? ' skills-page' : page === 'settings' ? ' hub-settings-page' : '')}>
-            {!['market','ledger','settings'].includes(page) && <div className="page-heading"><div><h1>{title}{page !== 'skills' && <span className="heading-dot">.</span>}</h1><p>{subtitle}</p></div><div className="heading-actions">{page === 'overview' ? <div className="overview-date"><span className="today">{fmtDate(clock)}<span>{clock.toLocaleDateString('zh-CN', {weekday:'long',timeZone:'Asia/Shanghai'})}</span></span><small>工作台快照 {fmtDate(data.generated_at)} {fmtTime(data.generated_at)}</small></div> : page === 'projects' ? <button className="button primary" onClick={() => setModal({ type: 'new-project' })}><Plus size={16} />添加工程</button> : page === 'skills' ? <button className="button primary" onClick={() => setModal({ type: 'new-skill' })}><Plus size={16} />新建技能草稿</button> : page === 'rules' ? null : page === 'usage' ? null : <button className="button" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : refresh()}><RefreshCw size={15} />重新检查</button>}</div></div>}
+          <main className={'main-content' + (page === 'skills' ? ' skills-page' : '')}>
+            {!['market','ledger'].includes(page) && <div className="page-heading"><div><h1>{title}{page !== 'skills' && <span className="heading-dot">.</span>}</h1><p>{subtitle}</p></div><div className="heading-actions">{page === 'overview' ? <div className="overview-date"><span className="today">{fmtDate(clock)}<span>{clock.toLocaleDateString('zh-CN', {weekday:'long',timeZone:'Asia/Shanghai'})}</span></span><small>工作台快照 {fmtDate(data.generated_at)} {fmtTime(data.generated_at)}</small></div> : page === 'projects' ? <button className="button primary" onClick={() => setModal({ type: 'new-project' })}><Plus size={16} />添加工程</button> : page === 'skills' ? <button className="button primary" onClick={() => setModal({ type: 'new-skill' })}><Plus size={16} />新建技能草稿</button> : page === 'rules' ? null : page === 'usage' ? null : <button className="button" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : refresh()}><RefreshCw size={15} />重新检查</button>}</div></div>}
             {error && <div className="inline-error">{error}，当前展示上次读取的数据。</div>}
             {page !== 'ledger' && deleteFailures.length > 0 && <div className="ledger-sync-errors" role="alert">
               <header><strong>{deleteFailures.length} 条记录删除待处理</strong>
                 <button type="button" className="text-button" onClick={() => navigate('ledger')}>查看失败原因<ArrowRight size={14}/></button>
               </header>
             </div>}
-            {page === 'settings' && <WorkspaceSettings section={params.section} onNavigate={section => navigate('settings', { section })} hidden={hiddenModules} toggleModule={toggleModule}
-              data={data} refresh={refresh} theme={theme} chooseTheme={chooseTheme} layout={layout} compact={compact} setCompact={setCompact}
-              rowHeight={rowHeight} setRowHeight={setRowHeight} motion={motion} setMotion={setMotion}/>}
             {page === 'ledger' && <LedgerPage sinkDone={layout.sinkDone} rowHeight={rowHeight} setRowHeight={setRowHeight} suggestionsAvailable={data.features?.task_suggestions}
               route={params} projects={data.projects} syncAnchor={syncAnchor} navigate={next => navigate('ledger', next)}
               onSyncHistory={() => { loadAttention(); navigate('changes', { section: 'tracker' }); }}/>}
@@ -445,6 +457,10 @@ function App() {
         </div>
       </>}
     </div>
+    {settingsOpen && data && <WorkspaceSettings section={route.params.section} onNavigate={section => navigate('settings', { section })}
+      onClose={closeSettings} hidden={hiddenModules} toggleModule={toggleModule} data={data} refresh={refresh}
+      theme={theme} chooseTheme={chooseTheme} layout={layout} compact={compact} setCompact={setCompact}
+      rowHeight={rowHeight} setRowHeight={setRowHeight} motion={motion} setMotion={setMotion}/>}
     {toast && <div role="status" className="toast"><Check size={16} />{toast}</div>}
     {modal && <Modal key={modal.type + (modal.id || '')} onProjectAdded={async project => { await refresh(false); navigate('projects'); select('project',project.id,'projects'); setModal(null); notify('工程已添加，网页版与 App 共用本机清单'); }} modal={modal} data={data} drafts={drafts} notify={notify} copy={copy} close={() => setModal(null)} navigate={navigate} />}
     {mobileNav && <div className="nav-scrim" onClick={() => setMobileNav(false)} />}

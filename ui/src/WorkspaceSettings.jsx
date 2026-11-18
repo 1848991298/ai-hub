@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Check, ChevronRight, Folder, FolderGit2, Gauge, Info, Keyboard, LayoutGrid, ListTodo, Palette, RefreshCw, SlidersHorizontal, Store } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Check, ChevronRight, Folder, FolderGit2, Gauge, Info, Keyboard, LayoutGrid, ListTodo, Palette, RefreshCw, SlidersHorizontal, Store, X } from 'lucide-react';
 import { themes } from './themes.js';
 
 export const workspaceModules = [
@@ -158,7 +158,19 @@ function Diagnostics() {
   </>;
 }
 
-export default function WorkspaceSettings({ section, onNavigate, hidden, toggleModule, data, refresh, ...appearance }) {
+export default function WorkspaceSettings({ section, onNavigate, onClose, hidden, toggleModule, data, refresh, ...appearance }) {
+  const dialog = useRef(null);
+  useEffect(() => {
+    const panel = dialog.current;
+    const previous = document.activeElement;
+    panel.showModal();
+    panel.querySelector('[aria-current="page"]')?.focus({ preventScroll: true });
+    return () => {
+      panel.close();
+      const target = previous?.isConnected && previous !== document.body ? previous : document.querySelector('.hub-settings-link');
+      target?.focus({ preventScroll: true });
+    };
+  }, []);
   const allSections = sections.flatMap(([, items]) => items);
   const current = allSections.find(([id]) => id === section) || allSections.find(([id]) => id === 'general');
   const [id, title] = current;
@@ -170,15 +182,26 @@ export default function WorkspaceSettings({ section, onNavigate, hidden, toggleM
     shortcuts: '常用入口可以直接用键盘打开',
     about: '个人工程、规则与 AI 能力工作台',
   };
-  return <div className="hub-settings">
-    <header className="hub-page-heading"><h1>工作台设置</h1><p>外观、导航与本机偏好</p></header>
-    <div className="hub-settings-layout">
+  return <dialog className="hub-settings-dialog" ref={dialog} aria-labelledby="hub-settings-title"
+    onCancel={event => { event.preventDefault(); onClose(); }} onKeyDown={event => {
+      if (event.key !== 'Tab') return;
+      const controls = [...event.currentTarget.querySelectorAll('button,a[href],input,select,textarea,[tabindex="0"]')]
+        .filter(element => !element.matches(':disabled') && element.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }}>
+    <div className="hub-settings">
+      <aside className="hub-settings-sidebar">
+      <header className="hub-settings-title"><h1 id="hub-settings-title">设置</h1><span>AI Hub</span></header>
       <nav aria-label="设置分类" className="hub-settings-nav">
         {sections.map(([group, items]) => <div key={group}>
           <p>{group}</p>
           {items.map(([key, label, Icon]) => <button type="button" className="nav-item" key={key} aria-current={id === key ? 'page' : undefined} onClick={() => onNavigate(key)}><Icon size={17} strokeWidth={1.5}/>{label}</button>)}
         </div>)}
       </nav>
+      <div className="hub-settings-footnote">本机工作区</div>
+      </aside>
       <section className="hub-setting-content" key={id} aria-labelledby="hub-setting-section">
         <header className="hub-setting-heading">
           <h2 id="hub-setting-section">{title}</h2>
@@ -194,6 +217,7 @@ export default function WorkspaceSettings({ section, onNavigate, hidden, toggleM
           <SettingRow title="项目主页"><a className="text-button" href="https://github.com/1848991298/ai-hub" target="_blank" rel="noreferrer">GitHub <ChevronRight size={14}/></a></SettingRow>
         </div>}
       </section>
+      <button type="button" className="hub-settings-close" aria-label="关闭设置" title="关闭设置 · Esc" onClick={onClose}><X size={18} strokeWidth={1.5}/></button>
     </div>
-  </div>;
+  </dialog>;
 }
