@@ -1,7 +1,19 @@
 export const statuses = ['未启动', '开发中', '测试中', '已完成'];
 export const priorities = ['P0', 'P1', 'P2'];
 export const taskCategories = ['需求', '优化'];
+export const recordTypes = ['问题', ...taskCategories];
 export const categoryOf = row => row.kind === 'issue' ? '问题' : row.category || '未分类';
+
+export function recordScope(route = {}) {
+  const type = [...recordTypes, '未分类'].includes(route.type) ? route.type : '';
+  const kind = type ? (type === '问题' ? 'issue' : 'task') : ['issue', 'task', 'all'].includes(route.kind) ? route.kind : 'all';
+  return { kind, type: type || (kind === 'issue' ? '问题' : '') };
+}
+
+export function draftWithType(draft, type) {
+  return { ...draft, kind: type === '问题' ? 'issue' : 'task',
+    form: { ...draft.form, category: taskCategories.includes(type) ? type : '' } };
+}
 export const canonicalStatus = status => ({ '进行中': '开发中', '已结束': '已完成' }[status] || status);
 export const isDone = row => canonicalStatus(row.status) === '已完成';
 

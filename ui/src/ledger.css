@@ -158,6 +158,10 @@
 .ledger-tag-editor{grid-column:1 / -1;display:grid;gap:8px;color:var(--text-secondary);font-size:13px;font-weight:650}
 .ledger-category-editor{display:grid;gap:6px;color:var(--text-secondary);font-size:13px;font-weight:650}
 .ledger-category-editor small{font-size:12px;font-weight:400;color:var(--text-muted)}
+.ledger-create-type{display:grid;gap:8px;color:var(--text-secondary);font-size:13px;font-weight:650}
+.ledger-create-type small{font-size:12px;font-weight:400;color:var(--text-muted);line-height:1.5}
+.ledger-create-type .ledger-choice{max-width:360px}
+.ledger-create-type button{min-height:36px}
 .ledger-pill.is-category-need{color:var(--blue);background:var(--blue-bg)}
 .ledger-pill.is-category-opt{color:var(--success);background:var(--success-bg)}
 .ledger-tag-label{display:flex;align-items:center;gap:8px}

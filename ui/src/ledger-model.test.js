@@ -1,6 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { categoryOf, taskCategories, mergeTags, hasTag, canonicalStatus, isDone, isOverdue, statuses, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, stretchLastColumn, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
+import { categoryOf, taskCategories, recordScope, draftWithType, mergeTags, hasTag, canonicalStatus, isDone, isOverdue, statuses, columnSequence, columnWidths, cycleFacet, cycleMode, emptyFilters, fillColumnWidths, stretchLastColumn, filterRecords, fitColumnWidths, knownTags, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, changedFields } from './ledger-model.js';
+
+test('统一类型保留旧任务链接，未分类记录不被当成需求', () => {
+  assert.deepEqual(recordScope(), { kind: 'all', type: '' });
+  assert.deepEqual(recordScope({ kind: 'issue' }), { kind: 'issue', type: '问题' });
+  assert.deepEqual(recordScope({ kind: 'task' }), { kind: 'task', type: '' });
+  assert.deepEqual(recordScope({ kind: 'issue', type: '优化' }), { kind: 'task', type: '优化' });
+  assert.deepEqual(recordScope({ type: '需求' }), { kind: 'task', type: '需求' });
+  assert.deepEqual(recordScope({ type: '未分类' }), { kind: 'task', type: '未分类' });
+  const legacy = { kind: 'task', category: '' };
+  assert.equal(categoryOf(legacy), '未分类');
+  assert.equal(legacy.category, '');
+});
+
+test('新增表单切换三种类型只改变写入目标和分类，保留草稿及同步标识', () => {
+  const draft = { kind: 'issue', requestId: 'same-operation', form: {
+    content: '补齐异常重试', note: '保留备注', tags: ['app'], status: '开发中', priority: 'P1', due: '2026-11-20', category: '' } };
+  const need = draftWithType(draft, '需求');
+  assert.equal(need.kind, 'task');
+  assert.equal(need.form.category, '需求');
+  const opt = draftWithType(need, '优化');
+  assert.equal(opt.kind, 'task');
+  assert.equal(opt.form.category, '优化');
+  const issue = draftWithType(opt, '问题');
+  assert.deepEqual(issue, draft);
+  assert.equal(issue.requestId, draft.requestId);
+  assert.equal(issue.form.tags, draft.form.tags);
+  assert.equal(draft.form.category, '');
+  assert.equal(draftWithType(opt, '任务').form.category, '', '未配置类型字段时保持兼容任务');
+});
 
 const rows = [
   { id: 'a', content: '过期未结束', status: '未启动', priority: 'P1', due: '2026-10-01', created_at: '2026-10-01 09:00', note: '' },
