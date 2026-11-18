@@ -131,6 +131,36 @@ class SnapshotTests(unittest.TestCase):
         finally:
             server.shutdown(); server.server_close(); worker.join()
 
+    def test_task_suggestions_only_send_validated_fields_from_local_origin(self):
+        server = ThreadingHTTPServer(('127.0.0.1', 0), partial(preview.Handler, directory=str(self.root / 'ui')))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        origin = f'http://127.0.0.1:{server.server_port}'
+        record = {'title': '示例任务', 'status': '开发中', 'priority': 'P2', 'evidence': '等待回归'}
+
+        def request(value, request_origin):
+            with_connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+            try:
+                with_connection.request('POST', '/api/task-suggestions', json.dumps(value),
+                                        {'Content-Type': 'application/json', 'Origin': request_origin})
+                response = with_connection.getresponse()
+                return response.status, response.read()
+            finally:
+                with_connection.close()
+
+        try:
+            with patch('task_suggestions.codex_executable', side_effect=AssertionError('invalid request started Codex')):
+                self.assertEqual(request(record, 'https://other.test')[0], 403)
+                self.assertEqual(request(dict(record, command='not accepted'), origin)[0], 400)
+                self.assertEqual(request(dict(record, evidence=''), origin)[0], 400)
+            result = {'changes': {'status': {'value': '测试中', 'reason': '等待回归'}}}
+            with patch.object(preview, 'suggest', return_value=result) as suggest:
+                status, body = request(record, origin)
+                self.assertEqual((status, json.loads(body)), (200, result))
+                suggest.assert_called_once_with(record)
+        finally:
+            server.shutdown(); server.server_close(); worker.join()
+
     def test_task_context_rejects_stale_revision_and_unattributed_usage(self):
         path = preview.task_context_path('task', 'recExample')
         branch, folder = 'example', '/test/repo'

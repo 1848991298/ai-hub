@@ -100,6 +100,7 @@ def main():
         shutil.copy2(ROOT / 'scripts/tracker_hub.py', resources / 'tracker_hub.py')
         shutil.copy2(ROOT / 'scripts/tracker_outbox.py', resources / 'tracker_outbox.py')
         shutil.copy2(ROOT / 'scripts/tracker_config.py', resources / 'tracker_config.py')
+        shutil.copy2(ROOT / 'scripts/task_suggestions.py', resources / 'task_suggestions.py')
         shutil.copy2(ROOT / 'scripts/cursor_rules.applescript', resources / 'cursor_rules.applescript')
         info = dict(CFBundleName='AI Hub', CFBundleDisplayName='AI Hub', CFBundleExecutable='AIHub',
                     CFBundleIdentifier='com.aihub.desktop', CFBundlePackageType='APPL', CFBundleShortVersionString='0.7.0',
@@ -122,7 +123,7 @@ def main():
             '-target', f'{architecture}-apple-macos13.0', '-framework', 'Cocoa',
             str(ROOT / 'desktop/macos/project_picker.swift'), '-o', str(picker_executable / 'AIHubProjectPicker'))
         run('codesign', '--force', '--sign', identity, str(picker))
-        run('xcrun', 'swift', str(ROOT / 'desktop/macos/icon.swift'), str(resources))
+        run('xcrun', 'swift', str(ROOT / 'desktop/macos/icon.swift'), str(resources), str(ROOT / 'ui/src/brand.json'))
         run('codesign', '--force', '--sign', identity, str(bundle))
         run('codesign', '--verify', '--deep', '--strict', str(bundle))
         destination = output / 'AI Hub.app'

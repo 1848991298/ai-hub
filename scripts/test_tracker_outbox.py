@@ -69,10 +69,12 @@ class OutboxTests(unittest.TestCase):
         with patch.object(self.client, 'update', side_effect=AssertionError('不应在入队调用飞书')):
             result = self.service.enqueue(body)
         self.assertTrue(result['accepted'])
+        self.assertEqual(self.service.queue_receipt(result['job_ids'][0]), {'state': 'pending', 'error': None})
         self.assertEqual(result['snapshot']['issues'][0]['status'], '测试中')
         self.assertEqual(self.client.rows['issue'][0]['status'], '未启动')
         self.assertEqual(self.service.refresh()['issues'][0]['status'], '测试中')
         self.drain()
+        self.assertEqual(self.service.queue_receipt(result['job_ids'][0]), {'state': 'done', 'error': None})
         self.assertEqual(self.service.snapshot()['sync']['pending'], 0)
         self.assertEqual(self.client.rows['issue'][0]['status'], '测试中')
 

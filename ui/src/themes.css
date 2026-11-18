@@ -1,24 +1,24 @@
 :root,[data-theme="graphite"]{
   color-scheme:light;
-  --canvas:#f5f6f9;--surface:#fff;--surface-subtle:#f0f3f8;--surface-hover:#e9eef7;--surface-selected:#edf1ff;--sidebar:#edf0f6;
-  --text:#202b3b;--text-secondary:#526177;--text-muted:#586b82;--text-faint:#7b889b;--border:#dce2ec;
-  --accent:#3159db;--accent-button:#3159db;--on-accent:#fff;--accent-soft:#e6edff;
+  --canvas:#fafbfc;--surface:#fff;--surface-subtle:#f5f6f8;--surface-hover:#eceef2;--surface-selected:#e8edf7;--sidebar:#f3f4f6;
+  --text:#212631;--text-secondary:#5c626d;--text-muted:#686f7b;--text-faint:#777e89;--border:#e4e6eb;
+  --accent:#315ac2;--accent-button:#315ac2;--on-accent:#fff;--accent-soft:#e8edf7;
   --success:#25794e;--success-bg:#e7f3ec;--warning:#966315;--warning-bg:#fff1d9;
   --blue:#436bac;--blue-bg:#e9effb;--violet:#7c56aa;--violet-bg:#f0eafa;--ink:#4d607e;--ink-bg:#e8edf5;
   --overlay:#16233f66;--modal-shadow:#101d3930;
 }
 [data-theme="midnight"]{
   color-scheme:dark;
-  --canvas:#101722;--surface:#172233;--surface-subtle:#131d2d;--surface-hover:#203047;--surface-selected:#203656;--sidebar:#0b121c;
-  --text:#e9f0fc;--text-secondary:#b7c5da;--text-muted:#97a9c2;--text-faint:#8498b3;--border:#2a394f;
-  --accent:#83b4ff;--accent-button:#3867b5;--on-accent:#fff;--accent-soft:#233b60;
+  --canvas:#1b202b;--surface:#252c3a;--surface-subtle:#2c3547;--surface-hover:#303b50;--surface-selected:#303f66;--sidebar:#202632;
+  --text:#eef1f7;--text-secondary:#c2ccdd;--text-muted:#a4b1c7;--text-faint:#95a4bd;--border:#3c485f;
+  --accent:#9bb6fd;--accent-button:#9bb6fd;--on-accent:#192449;--accent-soft:#303f66;
   --success:#82d5aa;--success-bg:#19392d;--warning:#e3c47d;--warning-bg:#3c311e;
   --blue:#91b9f6;--blue-bg:#223654;--violet:#b9a0ed;--violet-bg:#332d4c;--ink:#b6c6df;--ink-bg:#29384c;
   --overlay:#030914b8;--modal-shadow:#00000066;
 }
 [data-theme="forest"]{
   color-scheme:light;
-  --canvas:#f2f6f3;--surface:#fff;--surface-subtle:#edf3ef;--surface-hover:#e3eee7;--surface-selected:#e8f2eb;--sidebar:#e7efe9;
+  --canvas:#f6f8f6;--surface:#fff;--surface-subtle:#edf3ef;--surface-hover:#e3eee7;--surface-selected:#e8f2eb;--sidebar:#e7efe9;
   --text:#20392b;--text-secondary:#4f6858;--text-muted:#536e5c;--text-faint:#788e7f;--border:#d5e2d9;
   --accent:#226b4f;--accent-button:#226b4f;--on-accent:#fff;--accent-soft:#dceee1;
   --success:#226b4f;--success-bg:#e0efe4;--warning:#95691a;--warning-bg:#fbefd8;

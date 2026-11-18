@@ -1,8 +1,11 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, SlidersHorizontal, Image as ImageIcon, Info, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Columns3, GripVertical, Filter, ChevronDown, History, SlidersHorizontal, Image as ImageIcon, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { blankForm, categoryOf, taskCategories, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, defaultLedgerSort, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
+import TaskAssistant from './TaskAssistant.jsx';
 import { RecordDrawer, RecordImages, RecordText, RecordTextarea, imageTypes, maxImageCount, maxImageSize, stageImage, useRecordPreview } from './LedgerRecord.jsx';
+import { StatusLink, WorkspaceStatus } from './WorkspaceChrome.jsx';
 import './ledger.css';
 
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date());
@@ -293,18 +296,21 @@ function ColumnLayout({ columns, visibleColumns, hidden, widths, onWidth, onFit,
   </details>;
 }
 
-export default function LedgerPage({ sinkDone = true, route = {}, projects = [], navigate }) {
+export default function LedgerPage({ sinkDone = true, route = {}, projects = [], navigate, rowHeight, setRowHeight, suggestionsAvailable, syncAnchor, onSyncHistory }) {
   const kind = ['issue', 'task', 'all'].includes(route.kind) ? route.kind : 'issue';
   const recordId = route.record || '';
   const overdueMode = route.overdue === '1' ? 'include' : route.overdue === 'exclude' ? 'exclude' : null;
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshInFlight = useRef(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('ai-hub-ledger-view') === 'board' ? 'board' : 'list');
-  const [rowHeight, setRowHeight] = useState(() => savedValue('ai-hub-ledger-row-height') === 'auto' ? 'auto' : 'single');
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiSelection, setAiSelection] = useState('');
+  const aiTrigger = useRef(null);
   const [tagDraft, setTagDraft] = useState('');
   const [order, setOrder] = useState(() => savedValue('ai-hub-ledger-order') || {});
   const [floatBox, setFloatBox] = useState(null);
@@ -336,6 +342,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const rowDrag = useRef(null);
   const [editor, setEditor] = useState(null);
   const noteHeading = useRef(null);
+  const syncErrors = useRef(null);
   const recordPreview = useRecordPreview();
   const [draftImages, setDraftImages] = useState([]);
   const [imageError, setImageError] = useState('');
@@ -357,8 +364,13 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setError(value.error && !value.sync?.failed ? value.error : '');
   }
   async function load(action = 'snapshot', promptAuth = false) {
+    if (refreshInFlight.current) return;
+    const manual = action === 'refresh';
+    if (manual) {
+      refreshInFlight.current = true;
+      setRefreshing(true);
+    }
     const version = mutationClock.current, sequence = ++readSequence.current;
-    setLoading(true);
     try {
       const value = await api(action, action === 'snapshot' ? undefined : {});
       if (mounted.current && promptAuth && value.authorization_required) setAuthOpen(true);
@@ -368,13 +380,18 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     } catch (reason) {
       if (mounted.current && sequence === readSequence.current) setError(reason.message);
     } finally {
-      if (mounted.current) setLoading(false);
+      if (manual) {
+        refreshInFlight.current = false;
+        if (mounted.current) {
+          setRefreshing(false);
+          if (version !== mutationClock.current) load();
+        }
+      }
     }
   }
   useEffect(() => { if (!data?.sync?.pending) return; const timer = setInterval(() => load(), 1200); return () => clearInterval(timer); }, [data?.sync?.pending]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-hidden-columns', JSON.stringify(hiddenColumns)); } catch {} }, [hiddenColumns]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-archive-mode', JSON.stringify(archiveMode)); } catch {} }, [archiveMode]);
-  useEffect(() => { try { localStorage.setItem('ai-hub-ledger-row-height', JSON.stringify(rowHeight)); } catch {} }, [rowHeight]);
   useEffect(() => { if (['active', 'archived', 'all'].includes(route.archive)) setArchiveMode(route.archive); }, [route.archive]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-columns', JSON.stringify(widths)); } catch { /* 本窗口仍可使用当前列宽。 */ } }, [widths]);
   useEffect(() => { try { localStorage.setItem('ai-hub-ledger-width-mode', JSON.stringify(widthMode)); } catch {} }, [widthMode]);
@@ -404,11 +421,9 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     load();
     const tick = () => { if (!document.hidden) load(); };
     const timer = setInterval(tick, 30000);
-    const onFocus = () => load();
-    addEventListener('focus', onFocus);
-    addEventListener('ai-hub-refresh-ledger', onFocus);
+    addEventListener('focus', tick);
     document.addEventListener('visibilitychange', tick);
-    return () => { mounted.current = false; clearInterval(timer); removeEventListener('focus', onFocus); removeEventListener('ai-hub-refresh-ledger', onFocus); document.removeEventListener('visibilitychange', tick); };
+    return () => { mounted.current = false; clearInterval(timer); removeEventListener('focus', tick); document.removeEventListener('visibilitychange', tick); };
   }, []);
 
   function chooseKind(next) {
@@ -559,6 +574,19 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     } catch (reason) { setError(reason.message); return false; }
     finally { setSaving(false); }
   }
+  async function queueSuggestion(row, patch, id) {
+    if (saving) throw new Error('当前有操作正在提交，请稍后重试。');
+    if (row.sync_state || row.archived) throw new Error('记录状态已更新，请刷新后重新复核。');
+    setSaving(true);
+    try {
+      const result = await api('enqueue', { operation: 'update', kind: row.kind, record_id: row.id,
+        client_operation_id: id, base: valuesOf(row), patch });
+      acceptSnapshot(result.snapshot);
+      return result.job_ids[0];
+    } finally {
+      if (mounted.current) setSaving(false);
+    }
+  }
   async function syncAction(job, operation) {
     try { const result = await api('queue-control', { operation, job_id: job.id }); acceptSnapshot(result.snapshot); }
     catch (reason) { setError(reason.message); }
@@ -696,6 +724,13 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const visible = filterRecords(scopedRows, filters, day);
   const selectionKey = row => (row.kind || kind) + ':' + row.id;
   const selectable = visible.filter(row => row.id.startsWith('rec'));
+  const aiRow = scopedRows.find(row => selectionKey(row) === aiSelection) || selectable[0];
+  function closeAssistant() { setAiOpen(false); aiTrigger.current?.focus(); }
+  function selectForAssistant(row, event) {
+    if (!aiOpen || !row.id.startsWith('rec')) { openDetail(row, event); return; }
+    recordPreview.dismiss();
+    setAiSelection(selectionKey(row));
+  }
   const selectedRows = selectable.filter(row => selected.includes(selectionKey(row)));
   const selectionScope = selectable.map(selectionKey).join('|');
   useEffect(() => { const allowed = new Set(selectionScope.split('|')); setSelected(current => current.filter(key => allowed.has(key))); }, [selectionScope]);
@@ -731,11 +766,25 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     ...Object.entries(filters.tags || {}).map(([value, mode]) => ({ key: `tag-${value}`, label: `${mode === 'exclude' ? '排除' : '含'} ${value}`, clear: () => clearFacet('tags', value) })),
     ...(filters.overdue ? [{ key: 'overdue', label: filters.overdue === 'exclude' ? '排除已过截止' : '只看已过截止', clear: () => changeOverdue(null) }] : []),
   ];
-  const synced = data?.synced_at ? new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未成功';
-  const readError = Boolean(data?.error || (!data && error));
-  const syncTone = failedJobs.length || readError ? 'is-error' : data?.sync?.pending ? 'is-pending' : data?.synced_at ? '' : 'is-idle';
-  const syncLabel = data?.authorization_required ? '飞书待授权 · 保留上次记录' : failedJobs.length ? `${failedJobs.length} 项同步待处理` : data?.sync?.pending ? `后台同步 ${data.sync.pending} 项` : readError ? '读取异常 · 保留上次记录' : data?.synced_at ? `已同步 · ${synced}` : loading ? '正在读取…' : '尚未成功读取';
-  const syncHelp = '飞书是主数据。打开页面、手动刷新及服务运行期间定期读取。退出 Hub 后停止；截止时间只用于筛选，不会自动完成。';
+  const synced = data?.synced_at && new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
+  const readError = Boolean(data?.error || error);
+  const authorizationRequired = Boolean(data?.authorization_required);
+  let status = '正在读取';
+  let tone = 'is-busy';
+  let detail;
+  if (refreshing) status = '正在同步';
+  else if (authorizationRequired || readError || failedJobs.length) {
+    tone = 'is-warning';
+    status = authorizationRequired ? '飞书待授权' : readError ? '同步异常' : '同步待处理';
+    detail = [status, readError && synced && '保留上次记录', failedJobs.length ? `${failedJobs.length} 项待处理` : ''].filter(Boolean).join(' · ');
+  } else if (data?.sync?.pending) status = '后台同步 ' + data.sync.pending + ' 项';
+  else if (synced) {
+    status = '同步正常';
+    tone = 'is-ready';
+  } else if (data) {
+    status = '待同步';
+    tone = 'is-idle';
+  }
   const editorLabel = editor?.kind === 'task' ? '任务' : '问题';
   const reading = editor?.mode === 'read';
   const recordForEditor = (editor?.kind === 'task' ? tasks : issues).find(row => row.id === editor?.recordId) || editor?.row;
@@ -764,11 +813,12 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     const fullText = row[field] || '';
     const text = note ? fullText : (wrap && fullText.trim()) || recordTitle(row);
     const preview = wrap ? {} : recordPreview.bind(fullText, note ? '备注' : '内容', !note && text === fullText.trim());
-    return <button type="button" className={note ? 'ledger-note-text' : 'ledger-row-title'} aria-haspopup="dialog"
+    return <button type="button" className={note ? 'ledger-note-text' : 'ledger-row-title'} aria-haspopup={note || !aiOpen ? 'dialog' : undefined}
       {...preview}
       onClick={event => {
         event.stopPropagation();
-        openDetail(row, event, note);
+        if (note) openDetail(row, event, true);
+        else selectForAssistant(row, event);
       }}>{text}</button>;
   }
   function renderCell(key, row) {
@@ -809,14 +859,28 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     }
   }
   return <section className="ledger">
+    {syncAnchor && createPortal(<WorkspaceStatus title="任务台账同步" status={status} tone={tone} detail={detail} timestamp={synced}
+      refreshLabel={refreshing ? '正在同步…' : authorizationRequired ? '重新授权飞书' : readError ? '重试同步' : '同步当前台账'}
+      busy={refreshing} onRefresh={() => authorizationRequired ? setAuthOpen(true) : load('refresh', true)}>
+      {close => <StatusLink icon={History} onClick={() => {
+        close();
+        if (syncErrors.current) {
+          syncErrors.current.scrollIntoView({ block: 'nearest' });
+          syncErrors.current.focus({ preventScroll: true });
+        } else onSyncHistory();
+      }}>{failedJobs.length ? `查看 ${failedJobs.length} 项待处理` : '查看同步状态'}</StatusLink>}
+    </WorkspaceStatus>, syncAnchor)}
     <header className="ledger-head">
       <div>
-        <h1>问题与任务<span>.</span></h1>
-        <p className="ledger-sync-caption"><span className={'ledger-connected-dot ' + syncTone} aria-hidden="true"/><span title={synced}>{syncLabel}</span><span className="ledger-info" role="img" tabIndex={0} aria-label={syncHelp} title={syncHelp}><Info size={13}/></span></p>
+        <h1>问题与任务</h1>
+        <p className="ledger-source" title="服务运行期间定期读取飞书">飞书台账 · 本机工作区</p>
       </div>
       <div className="ledger-actions">
         {data?.base_url && <a href={data.base_url} target="_blank" rel="noreferrer">打开飞书表格</a>}
-        <button type="button" onClick={() => load('refresh', true)} disabled={loading}><RefreshCw size={15}/>{loading ? '读取中…' : '立即刷新'}</button>
+        <button ref={aiTrigger} type="button" className="ledger-ai-trigger" aria-expanded={aiOpen} aria-controls={aiOpen ? 'task-assistant' : undefined} disabled={!data}
+          onClick={() => { if (aiOpen) closeAssistant(); else { setAiSelection(aiRow ? selectionKey(aiRow) : ''); setAiOpen(true); } }}>
+          <Sparkles size={15}/>AI 建议
+        </button>
         {(kind === 'all' ? ['issue', 'task'] : [kind]).map(target => <button type="button" className="ledger-primary" key={target} onClick={event => openCreate(target, event)}><Plus size={15}/>新增{target === 'issue' ? '问题' : '任务'}</button>)}
       </div>
     </header>
@@ -829,7 +893,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       setAuthOpen(false);
       load('refresh');
     }}/>}
-    {failedJobs.length > 0 && <section className="ledger-sync-errors" role="alert">
+    {failedJobs.length > 0 && <section className="ledger-sync-errors" role="alert" ref={syncErrors} tabIndex={-1} aria-label="同步待处理">
       <header><strong>{failedJobs.length} 项同步待处理</strong><span>可按下方提示处理。</span></header>
       {failedJobs.map(job => {
         const deleting = job.operation === 'delete';
@@ -901,9 +965,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       {selectedRows.every(row => data?.archive_supported?.[row.kind || kind]) && <button type="button" disabled={saving} onClick={() => submitPatches(selectedRows, { archived: archiveMode !== 'archived' })}>{archiveMode === 'archived' ? <ArchiveRestore size={15}/> : <Archive size={15}/>}{archiveMode === 'archived' ? '恢复' : '归档'}</button>}
       <button type="button" onClick={() => setSelected([])} aria-label="取消批量选择"><X size={15}/></button>
     </div>}
+    <div className={aiOpen ? 'ledger-workspace has-assistant' : 'ledger-workspace'}>
     {view === 'board' ? <div className="ledger-board">{statuses.map(status => <section key={status} className="ledger-column" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); const row = visible.find(item => item.id === id); if (row) moveStatus(row, status); }}>
       <header><strong>{status}</strong><em>{visible.filter(row => row.status === status).length}</em></header>
-      {visible.filter(row => row.status === status).map(row => <article key={row.id} draggable={!saving} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }} onClick={event => openDetail(row, event)}>
+      {visible.filter(row => row.status === status).map(row => <article key={row.id} className={aiOpen && row === aiRow ? 'is-ai-current' : undefined} draggable={!saving} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }} onClick={event => selectForAssistant(row, event)}>
         <h3>{recordButton(row)}</h3>{kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
         {supportsTags(row.kind) && <div className="ledger-card-tags" onClick={event => event.stopPropagation()}>{(row.tags || []).map(tag => <button key={tag} type="button" className={`ledger-pill is-tag ${(filters.tags || {})[tag] ? `is-${(filters.tags || {})[tag]}` : ''}`} onClick={() => setFacet('tags', tag)}>{tag}</button>)}{taggingId === row.id ? <input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入标签" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitRowTag(row); } if (event.key === 'Escape') { tagCommit.current = true; setTaggingId(null); } }} onBlur={() => commitRowTag(row)} /> : <button type="button" className="ledger-add-tag" onClick={event => beginRowTag(event, row)}>+ 标签</button>}</div>}
         <footer>{showCategoryColumn && <Pill tone={row.category === '优化' ? 'is-category-opt' : 'is-category-need'}>{categoryOf(row)}</Pill>}<Pill tone={priorityTone[row.priority]}>{row.priority}</Pill><span className={isOverdue(row, day) ? 'ledger-past' : ''}>{row.due || '无截止'}</span>{contextButton(row)}</footer>
@@ -936,8 +1001,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
             {key === columns.at(-1) ? <span className="ledger-auto-width" title="末列自动填充剩余空间">自动</span> : <ColumnResize label={columnLabels[key]} value={fittedWidths[key]} minimum={ledgerColumnLimits[key][0]} maximum={ledgerColumnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => resizeColumn(key, value)} />}
           </th>)}
         </tr></thead>
-        <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={event => openDetail(row, event)}
-          className={[row.archived ? 'is-archived' : '', selected.includes(selectionKey(row)) ? 'is-selected' : '', rowTarget?.key === row.id ? (rowTarget.after ? 'drop-after' : 'drop-before') : ''].filter(Boolean).join(' ')}
+        <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={event => selectForAssistant(row, event)}
+          className={[row.archived ? 'is-archived' : '', selected.includes(selectionKey(row)) ? 'is-selected' : '', aiOpen && row === aiRow ? 'is-ai-current' : '', rowTarget?.key === row.id ? (rowTarget.after ? 'drop-after' : 'drop-before') : ''].filter(Boolean).join(' ')}
           onDragOver={event => {
             const target = rowDrop(event, row);
             if (target && (rowTarget?.key !== row.id || rowTarget.after !== target.after)) setRowTarget(target);
@@ -961,6 +1026,9 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       </table>
       {!visible.length && <div className="ledger-empty">{data ? '当前筛选下没有记录。' : '正在读取飞书表格…'}</div>}
     </div>}
+    {aiOpen && <TaskAssistant row={aiRow} available={suggestionsAvailable} busy={saving} onClose={closeAssistant}
+      onDetails={event => openDetail(aiRow, event)} onQueue={queueSuggestion} onReadback={load}/>}
+    </div>
     {floatBox && <div className="ledger-float" style={floatBox.position} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = hasTag(floatTags, tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
     {contextRow && <TaskContext key={contextRow.kind + contextRow.id} row={contextRow} projects={projects} onClose={() => setContextRow(null)}/>}
     {recordPreview.popup}

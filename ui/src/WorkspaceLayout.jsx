@@ -4,11 +4,21 @@ import { clamp, defaultLayout, fitLayout, layoutKey, sidebarSpan, validLayout } 
 export function useWorkspaceLayout() {
   const [layout, setLayout] = useState(() => { try { return validLayout(JSON.parse(localStorage.getItem(layoutKey))); } catch { return defaultLayout; } });
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const [narrowCollapsed, setNarrowCollapsed] = useState(true);
   useEffect(() => { const resize = () => setViewportWidth(window.innerWidth); addEventListener('resize', resize); return () => removeEventListener('resize', resize); }, []);
   useEffect(() => { try { localStorage.setItem(layoutKey, JSON.stringify(layout)); } catch { /* 本窗口仍可使用布局。 */ } }, [layout]);
-  const fitted = fitLayout(layout, viewportWidth);
+  const narrow = viewportWidth > 760 && viewportWidth <= 1090;
+  const fitted = fitLayout({ ...layout, sidebarCollapsed: narrow ? narrowCollapsed : layout.sidebarCollapsed }, viewportWidth);
   function update(key, value) { setLayout(current => validLayout({ ...current, [key]: value })); }
-  return { ...fitted, sidebarSpan: sidebarSpan(fitted), viewportWidth, update, reset: () => setLayout(current => validLayout({ ...defaultLayout, fontSize: current.fontSize, sinkDone: current.sinkDone })) };
+  function toggleSidebar() {
+    if (narrow) setNarrowCollapsed(current => !current);
+    else update('sidebarCollapsed', !layout.sidebarCollapsed);
+  }
+  function reset() {
+    setNarrowCollapsed(true);
+    setLayout(current => validLayout({ ...defaultLayout, fontSize: current.fontSize, sinkDone: current.sinkDone }));
+  }
+  return { ...fitted, sidebarSpan: sidebarSpan(fitted), viewportWidth, update, toggleSidebar, reset };
 }
 
 export function PanelResize({ label, controls, value, minimum, maximum, defaultValue, direction = 1, onChange, className = '' }) {

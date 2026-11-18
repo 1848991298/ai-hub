@@ -31,14 +31,16 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 940),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "AI Hub"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 980, height: 680)
         window.contentView = webView
+        if !window.setFrameUsingName("AIHubWorkspace") { window.center() }
         window.setFrameAutosaveName("AIHubWorkspace")
-        window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         webView.loadHTMLString("""
-        <html lang="zh-CN"><meta charset="utf-8"><body style="background:#f5f6f9;color:#202b3b;font:15px -apple-system;padding:90px"><h1>AI Hub</h1><p>正在连接你的本地工作空间…</p></body></html>
+        <html lang="zh-CN"><meta charset="utf-8"><body style="background:#f8f9fb;color:#1d2432;font:15px -apple-system;padding:90px"><h1>AI Hub</h1><p>正在连接你的本地工作空间…</p></body></html>
         """, baseURL: nil)
         startup = Task { await connect() }
     }
@@ -48,6 +50,8 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         let appItem = NSMenuItem(); menu.addItem(appItem)
         let appMenu = NSMenu(); appItem.submenu = appMenu
         appMenu.addItem(withTitle: "关于 AI Hub", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let settings = appMenu.addItem(withTitle: "工作台设置…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "隐藏 AI Hub", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "退出 AI Hub", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -94,6 +98,12 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
     private func connect() async {
         guard let hub = locateHub() else { showError("未选择可用的 AI Hub 目录。请重新打开 App 后选择维护源。"); return }
         root = hub
+        var pageURL = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        if let index = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "web"),
+           let modified = try? index.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+            pageURL?.queryItems = [URLQueryItem(name: "build", value: String(modified.timeIntervalSince1970))]
+        }
+        let pageRequest = URLRequest(url: pageURL?.url ?? baseURL, cachePolicy: .reloadIgnoringLocalCacheData)
         do {
             // 检查已有监听者的身份和根目录，避免连接到另一份工作空间。
             let snapshot = try await fetch("api/snapshot", as: HubSnapshot.self)
@@ -106,7 +116,7 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
             let projects = try await fetch("api/projects/capabilities", as: ProjectSchema.self)
             guard projects.schema_version == 1 else { throw URLError(.badServerResponse) }
             setAppearance(appearance.theme)
-            webView.load(URLRequest(url: baseURL))
+            webView.load(pageRequest)
             return
         } catch {
             if let urlError = error as? URLError, [.cannotConnectToHost, .networkConnectionLost].contains(urlError.code) {
@@ -124,7 +134,7 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
                    URL(fileURLWithPath: snapshot.hub_root).resolvingSymlinksInPath() == hub {
                     let appearance = try await fetch("api/preferences", as: Appearance.self)
                     setAppearance(appearance.theme)
-                    webView.load(URLRequest(url: baseURL)); return
+                    webView.load(pageRequest); return
                 }
                 try await Task.sleep(for: .milliseconds(250))
             }
@@ -165,8 +175,8 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
 
     private func setAppearance(_ theme: String) {
         window.appearance = NSAppearance(named: ["midnight", "plum"].contains(theme) ? .darkAqua : .aqua)
-        let colors: [String: UInt32] = ["graphite": 0xf5f6f9, "midnight": 0x101722, "forest": 0xf2f6f3, "plum": 0x18151f]
-        let color = colors[theme] ?? 0xf5f6f9
+        let colors: [String: UInt32] = ["graphite": 0xfafbfc, "midnight": 0x1b202b, "forest": 0xf6f8f6, "plum": 0x18151f]
+        let color = colors[theme] ?? 0xfafbfc
         window.backgroundColor = NSColor(srgbRed: CGFloat((color >> 16) & 255)/255, green: CGFloat((color >> 8) & 255)/255, blue: CGFloat(color & 255)/255, alpha: 1)
     }
 
@@ -218,10 +228,13 @@ final class HubApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
     }
 
     @objc private func reloadPage() {
-        if isLocal(webView.url) { webView.reload() }
+        if isLocal(webView.url) { webView.reloadFromOrigin() }
         else { startup?.cancel(); startup = Task { await connect() } }
     }
     @objc private func openBrowser() { NSWorkspace.shared.open(baseURL) }
+    @objc private func openSettings() {
+        if isLocal(webView.url) { webView.evaluateJavaScript("location.hash = '#settings'") }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
         startup?.cancel()

@@ -13,6 +13,7 @@ import {
 import './styles.css';
 import './themes.css';
 import './workspace.css';
+import './desktop.css';
 import UsagePage from './UsagePage.jsx';
 import QuickFind from './QuickFind.jsx';
 import { readRoute, routeHash } from './navigation.js';
@@ -22,28 +23,31 @@ import RulesPage, { RulesSync } from './RulesPage.jsx';
 import { ProjectAdd } from './ProjectTools.jsx';
 import { ProjectGit } from './ProjectGit.jsx';
 import { PanelResize, useWorkspaceLayout } from './WorkspaceLayout.jsx';
+import { StatusLink, WorkspaceProfile, WorkspaceStatus } from './WorkspaceChrome.jsx';
+import HubMark from './HubMark.jsx';
+import WorkspaceSettings, { workspaceModules } from './WorkspaceSettings.jsx';
 import { themes, validTheme, applyTheme } from './themes.js';
 import { attentionItems, connectedSpaces, pinnedSkills, recentProjects, storedPins, storedVisits, togglePin } from './overview-model.js';
 
 const icons = { activity: Activity, hub: Blocks, bluetooth: Bluetooth, layers: Layers3, terminal: Terminal, git: GitBranch, package: Package, send: Send, file: FileText, cursor: Code2, palette: Palette };
 const pages = [
   { id: 'overview', label: '工作台', icon: LayoutGrid, group: '工作空间' },
-  { id: 'projects', label: '工程合集', icon: FolderGit2 },
-  { id: 'skills', label: 'Skills', icon: Sparkles, group: 'AI 资源' },
-  { id: 'rules', label: 'Rules', icon: FileText },
-  { id: 'ledger', label: '问题与任务', icon: ListTodo, group: '产品运营' },
-  { id: 'market', label: '应用运营', icon: Store },
-  { id: 'usage', label: '用量中心', icon: Gauge, group: '运行洞察' },
-  { id: 'changes', label: '变更与同步', icon: GitCompare, group: '维护' },
+  { id: 'projects', label: '工程合集', icon: FolderGit2, group: '工作空间' },
+  { id: 'ledger', label: '问题与任务', icon: ListTodo, group: '工作空间' },
+  { id: 'skills', label: 'Skills', icon: Blocks, group: 'AI 资源' },
+  { id: 'rules', label: 'Rules', icon: FileText, group: 'AI 资源' },
+  { id: 'usage', label: '用量中心', icon: Gauge, group: '运行与维护' },
+  { id: 'market', label: '应用运营', icon: Store, group: '运行与维护' },
+  { id: 'changes', label: '变更与同步', icon: GitCompare, group: '运行与维护' },
 ];
-const titles = { ledger: ['问题与任务', '查看、新增和修改飞书多维表格，并读回最新记录。'], market: ['应用运营', 'ISHO 的渠道版本、增长与业务数据。'], usage: ['用量中心', '看清每日消耗，掌握账号余量。'], overview: ['工作台', '今天要处理的事，以及最近打开的工程。'], projects: ['工程合集', '在一个地方，找到你的每一个工作空间。'], skills: ['Skills', 'Cursor 和 Codex 共用一份技能来源。'], rules: ['Rules', '一份清晰的约定，贯穿每一次协作。'], changes: ['变更与同步', '每一次修改，都有迹可循。'] };
+const titles = { settings: ['工作台设置', ''], ledger: ['问题与任务', '查看、新增和修改飞书多维表格，并读回最新记录。'], market: ['应用运营', 'ISHO 的渠道版本、增长与业务数据。'], usage: ['用量中心', '看清每日消耗，掌握账号余量。'], overview: ['工作台', '今天要处理的事，以及最近打开的工程。'], projects: ['工程合集', '在一个地方，找到你的每一个工作空间。'], skills: ['Skills', 'Cursor 和 Codex 共用一份技能来源。'], rules: ['Rules', '一份清晰的约定，贯穿每一次协作。'], changes: ['变更与同步', '每一次修改，都有迹可循。'] };
 const readers = [['Cursor', Code2], ['Codex', Blocks], ['Agents', Bot]];
 const readerLabel = name => name === 'Agents' ? 'Codex 通用目录' : name;
 const currentRoute = () => {
   const route = readRoute(location.hash);
-  return pages.some(p => p.id === route.page) ? route : { page: 'overview', params: {} };
+  return route.page === 'settings' || pages.some(p => p.id === route.page) ? route : { page: 'overview', params: {} };
 };
-const noInspector = ['usage', 'rules', 'market', 'ledger', 'changes'];
+const noInspector = ['usage', 'rules', 'market', 'ledger', 'changes', 'settings'];
 const colors = { '设备连接': 'blue', '工程协作': 'sage', '应用发布': 'violet', '工作效率': 'amber', '界面设计': 'violet' };
 const ownershipLabels = { personal: '自建', 'third-party': '第三方' };
 const fmtTime = value => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
@@ -51,6 +55,7 @@ const fmtDate = value => new Date(value).toLocaleDateString('zh-CN', { month: 'l
 const shortPath = path => path?.replace(/^\/Users\/[^/]+/, '~') || '';
 const getDraft = key => { try { return localStorage.getItem('ai-hub-draft:' + key); } catch { return null; } };
 function readStored(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
+function storePreference(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 当前窗口仍可使用设置 */ } }
 function readResourceDrafts() {
   try { return ['new-project','new-skill'].flatMap(type => JSON.parse(localStorage.getItem(`ai-hub-new-${type}`) || '[]').map(draft => ({...draft, type}))); }
   catch { return []; }
@@ -85,11 +90,18 @@ function App() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState('');
   const [drafts, setDrafts] = useState(readResourceDrafts);
-  const [compact, setCompact] = useState(() => localStorage.getItem('ai-hub-compact') === 'true');
+  const [compact, setCompact] = useState(() => readStored('ai-hub-compact') === true);
+  const [rowHeight, setRowHeight] = useState(() => readStored('ai-hub-ledger-row-height') === 'auto' ? 'auto' : 'single');
+  const [motion, setMotion] = useState(() => readStored('ai-hub-motion') !== false);
+  const [hiddenModules, setHiddenModules] = useState(() => {
+    const stored = readStored('ai-hub-hidden-modules');
+    return Array.isArray(stored) ? workspaceModules.map(item => item.id).filter(id => stored.includes(id)) : [];
+  });
   const [theme, setTheme] = useState(() => { try { return validTheme(localStorage.getItem('ai-hub-theme')); } catch { return 'graphite'; } });
   const preferenceWrite = useRef(false);
   const appearanceRevision = useRef(0);
   const [mobileNav, setMobileNav] = useState(false);
+  const [syncAnchor, setSyncAnchor] = useState(null);
   const [pins, setPins] = useState(() => storedPins(readStored('ai-hub-pinned-skills')));
   const [visits, setVisits] = useState(() => storedVisits(readStored('ai-hub-recent-projects')));
   const [attention, setAttention] = useState({ ready: false, ledger: null, market: null, rules: null });
@@ -123,6 +135,10 @@ function App() {
     if (request === attentionRequest.current) setAttention({ ready: true, ledger, market, rules });
   }
   useEffect(() => { applyTheme(theme); }, [theme]);
+  useEffect(() => { storePreference('ai-hub-compact', compact); }, [compact]);
+  useEffect(() => { storePreference('ai-hub-ledger-row-height', rowHeight); }, [rowHeight]);
+  useEffect(() => { storePreference('ai-hub-motion', motion); }, [motion]);
+  useEffect(() => { storePreference('ai-hub-hidden-modules', hiddenModules); }, [hiddenModules]);
   useEffect(() => {
     let active = true;
     async function syncAppearance() {
@@ -152,6 +168,7 @@ function App() {
   useEffect(() => { const update = () => setDrafts(readResourceDrafts()); addEventListener('ai-hub-drafts-changed', update); return () => removeEventListener('ai-hub-drafts-changed', update); }, []);
   useEffect(() => {
     function readLocation() {
+      setModal(null);
       setRoute(currentRoute());
       setQuery('');
       setMobileNav(false);
@@ -162,7 +179,7 @@ function App() {
   }, []);
   useEffect(() => {
     function keydown(event) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setModal({ type: 'search' }); }
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') { event.preventDefault(); setModal(null); navigate('settings'); }
       if (event.key === 'Escape') { setModal(null); setMobileNav(false); }
       if (event.key === '/' && !['INPUT', 'TEXTAREA'].includes(event.target.tagName) && !modal) { event.preventDefault(); searchInput.current?.focus(); }
     }
@@ -210,6 +227,9 @@ function App() {
     setMobileNav(false);
     if (destination.resource) setInspector(true);
   }
+  function toggleModule(id) {
+    setHiddenModules(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  }
   function select(type, id, targetPage = page) {
     setSelections(previous => ({ ...previous, [targetPage]: { type, id } }));
     if (targetPage === page && params.resource) navigate(page, { ...params, resource: id });
@@ -246,7 +266,6 @@ function App() {
   const homeSpaces = data && attention.ready ? connectedSpaces({ projects: data.projects, skills: data.skills, ledger: attention.ledger, market: attention.market }) : [];
   const homeProjects = data ? recentProjects(data.projects, visits) : [];
   const homeSkills = data ? pinnedSkills(data.skills, pins) : [];
-  const themeName = themes.find(item => item.id === theme)?.name || '石墨白';
   const [title, subtitle] = titles[page];
   const hasInspector = !noInspector.includes(page) && (page !== 'overview' || !!focus);
   const showInspector = inspector && hasInspector;
@@ -279,28 +298,95 @@ function App() {
   }
 
   const collapsed = layout.sidebarCollapsed;
-  return <div className={`app ${compact ? 'compact' : ''}`} style={{'--sidebar-width':layout.sidebarSpan+'px','--inspector-width':layout.inspectorWidth+'px','--ui-font-size':layout.fontSize+'px'}}><RulesSync page={page}/>
+  const drawerNavigation = layout.viewportWidth <= 760;
+  const navToggleLabel = (drawerNavigation ? mobileNav : !collapsed) ? '收起侧栏' : '展开侧栏';
+  const navGroups = [...new Set(pages.map(item => item.group))].map(group => [
+    group, pages.filter(item => item.group === group && !hiddenModules.includes(item.id)),
+  ]);
+  return <div className={`app ${compact ? 'compact' : ''} ${motion ? '' : 'hub-reduced-motion'}`} style={{'--sidebar-width':layout.sidebarSpan+'px','--inspector-width':layout.inspectorWidth+'px','--ui-font-size':layout.fontSize+'px'}}><RulesSync page={page}/>
     <aside id="workspace-sidebar" className={`sidebar ${mobileNav ? 'mobile-open' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
-      <button className="brand" aria-label="AI Hub" onClick={() => navigate('overview')}><span className="brand-mark"><Blocks size={24} strokeWidth={1.7} /></span><span className="brand-copy">AI Hub</span></button>
-      <nav>{pages.map(item => <React.Fragment key={item.id}>{item.group && <div className="nav-group">{item.group}</div>}<button className={`nav-item ${page === item.id ? 'active' : ''}`} aria-label={item.label} title={collapsed ? item.label : undefined} onClick={() => navigate(item.id)}><item.icon size={18} /><span className="nav-label">{item.label}</span>{item.id === 'skills' && data && <span className="nav-count">{data.skills.length}</span>}{item.id === 'changes' && !!data?.changes.length && <span className="nav-indicator" />}</button></React.Fragment>)}</nav>
-      <div className="sidebar-bottom">{drafts.length > 0 && <button className="nav-item" aria-label="资源草稿箱" title={collapsed ? '资源草稿箱' : undefined} onClick={() => setModal({ type: 'drafts' })}><PencilLine size={17} /><span className="nav-label">资源草稿箱</span><span className="nav-count">{drafts.length}</span></button>}<button className="nav-item" aria-label="工作台设置" title={collapsed ? '工作台设置' : undefined} onClick={() => setModal({ type: 'settings' })}><Settings2 size={17} /><span className="nav-label">工作台设置</span></button><button type="button" className="nav-item sidebar-toggle" aria-expanded={!collapsed} title={collapsed ? '展开导航' : '收起导航'} onClick={() => layout.update('sidebarCollapsed', !collapsed)}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}<span className="nav-label">{collapsed ? '展开导航' : '收起导航'}</span></button><button className="profile" aria-label="关于 AI Hub" onClick={() => setModal({ type: 'about' })}><span className="avatar">{(data?.profile?.mark || '·').slice(0, 2)}</span><span className="nav-label"><strong>本机用户</strong><small>{data?.profile?.subtitle || '本机显示名'}</small></span><CircleHelp className="nav-extra" size={16} /></button></div>
+      <div className="hub-brand-row">
+        <button type="button" className="brand" aria-label="AI Hub 工作台" title="返回工作台" onClick={() => navigate('overview')}>
+          <span className="brand-mark"><HubMark/></span><span className="brand-copy">AI Hub</span>
+        </button>
+        <IconButton className="icon-button hub-nav-toggle" title={navToggleLabel} aria-controls="workspace-sidebar"
+          aria-expanded={drawerNavigation ? mobileNav : !collapsed}
+          onClick={() => drawerNavigation ? setMobileNav(!mobileNav) : layout.toggleSidebar()}>
+          {(drawerNavigation ? mobileNav : !collapsed) ? <PanelLeftClose size={17}/> : <PanelLeftOpen size={17}/>}
+        </IconButton>
+      </div>
+      <nav aria-label="主导航">{navGroups.map(([group, items]) => items.length > 0 && <React.Fragment key={group}>
+        <div className="nav-group">{group}</div>
+        {items.map(item => <button key={item.id} type="button" className={page === item.id ? 'nav-item active' : 'nav-item'} aria-current={page === item.id ? 'page' : undefined} aria-label={item.label} title={collapsed ? item.label : undefined} onClick={() => navigate(item.id)}>
+          <item.icon size={17} strokeWidth={1.5}/><span className="nav-label">{item.label}</span>
+          {item.id === 'skills' && data && <span className="nav-count">{data.skills.length}</span>}
+          {item.id === 'changes' && !!data?.changes.length && <span className="nav-indicator"/>}
+        </button>)}
+      </React.Fragment>)}</nav>
+      <div className="sidebar-bottom">
+        {drafts.length > 0 && <button className="nav-item" aria-label="资源草稿箱" title={collapsed ? '资源草稿箱' : undefined} onClick={() => setModal({ type: 'drafts' })}><PencilLine size={17} /><span className="nav-label">资源草稿箱</span><span className="nav-count">{drafts.length}</span></button>}
+        <div className="hub-sidebar-controls">
+          <button type="button" className={'nav-item hub-settings-link' + (page === 'settings' ? ' active' : '')}
+            aria-current={page === 'settings' ? 'page' : undefined} aria-label="工作台设置" title="工作台设置"
+            onClick={() => navigate('settings', { section: 'general' })}>
+            <Settings2 size={17} strokeWidth={1.5}/><span className="nav-label">设置</span>
+          </button>
+          <WorkspaceProfile profile={data?.profile} onSettings={section => navigate('settings', { section })}/>
+        </div>
+      </div>
       {!collapsed && <PanelResize className="sidebar-resize" label="调整导航栏宽度" controls="workspace-sidebar" value={layout.sidebarWidth} minimum={184} maximum={320} defaultValue={224} onChange={value => layout.update('sidebarWidth', value)} />}
     </aside>
     <div className="workspace">
-      <header className="topbar"><div className="breadcrumb"><IconButton title="展开导航" onClick={() => setMobileNav(!mobileNav)}><Menu size={18} /></IconButton></div><div className="topbar-actions"><button className="command-trigger" onClick={() => setModal({ type: 'search' })}><Search size={15} /><span>搜索任何资源…</span><kbd>⌘ K</kbd></button><IconButton title={`切换外观，当前${themeName}`} className="icon-button appearance-trigger" onClick={() => chooseTheme(themes[(themes.findIndex(item => item.id === theme) + 1) % themes.length].id)}><Palette size={16} /></IconButton><IconButton title="重新读取本地数据" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : page === 'ledger' ? dispatchEvent(new Event('ai-hub-refresh-ledger')) : page === 'market' ? dispatchEvent(new Event('ai-hub-refresh-market')) : refresh()}><RefreshCw size={16} className={loading ? 'spin' : ''} /></IconButton></div></header>
+      <header className="topbar hub-topbar">
+        <div className="breadcrumb hub-breadcrumb">
+          {drawerNavigation && <IconButton className="icon-button hub-nav-toggle" title={mobileNav ? '收起导航' : '展开导航'}
+            aria-controls="workspace-sidebar" aria-expanded={mobileNav} onClick={() => setMobileNav(!mobileNav)}><Menu size={18}/></IconButton>}
+          <strong className="hub-breadcrumb-label">{title}</strong>
+        </div>
+        <QuickFind data={data} error={error} ledger={attention.ledger} onPick={navigate}
+          pages={[...pages, { id: 'settings', label: '工作台设置' }]} disabled={Boolean(modal)}/>
+        <div className="hub-topbar-status" ref={setSyncAnchor}>
+          {(page !== 'ledger' || !data) && <WorkspaceStatus key={page} title="工作台数据"
+            status={loading || (!data && !error) ? '正在读取' : error ? '读取异常' : '本地已就绪'}
+            tone={loading || (!data && !error) ? 'is-busy' : error ? 'is-warning' : 'is-ready'}
+            detail={error && data ? '读取异常 · 保留上次快照' : undefined}
+            timestamp={data?.generated_at && fmtDate(data.generated_at) + ' ' + fmtTime(data.generated_at)}
+            busy={loading} refreshLabel={loading ? '正在读取…' : error ? '重新连接' : '重新读取工作台'} onRefresh={() => refresh(false)}>
+            {close => <>
+              {data && page === 'usage' && <StatusLink icon={RefreshCw} onClick={() => { close(); dispatchEvent(new Event('ai-hub-refresh-usage')); }}>刷新用量</StatusLink>}
+              {data && page === 'market' && <StatusLink icon={RefreshCw} onClick={() => { close(); dispatchEvent(new Event('ai-hub-refresh-market')); }}>刷新运营记录</StatusLink>}
+              <StatusLink icon={History} onClick={() => { close(); navigate('changes'); }}>查看变更与同步</StatusLink>
+            </>}
+          </WorkspaceStatus>}
+        </div>
+      </header>
       {!data ? <div className="loading-page">{error ? <><HardDrive size={30} /><h2>本地服务尚未连接</h2><p>{error}</p><button className="button primary" onClick={() => refresh(false)}>重新连接</button></> : <><LoaderCircle className="spin" size={25} /><p>正在整理你的工作空间…</p></>}</div> : <>
         <div className={`workspace-body ${showInspector ? 'with-inspector' : ''}`}>
-          <main className={page === 'skills' ? 'main-content skills-page' : 'main-content'}>
-            {!['market','ledger'].includes(page) && <div className="page-heading"><div><h1>{title}{page !== 'skills' && <span className="heading-dot">.</span>}</h1><p>{subtitle}</p></div><div className="heading-actions">{page === 'overview' ? <div className="overview-date"><span className="today">{fmtDate(clock)}<span>{clock.toLocaleDateString('zh-CN', {weekday:'long',timeZone:'Asia/Shanghai'})}</span></span><small>工作台快照 {fmtDate(data.generated_at)} {fmtTime(data.generated_at)}</small></div> : page === 'projects' ? <button className="button primary" onClick={() => setModal({ type: 'new-project' })}><Plus size={16} />添加工程</button> : page === 'skills' ? <button className="button primary" onClick={() => setModal({ type: 'new-skill' })}><Plus size={16} />新建技能草稿</button> : page === 'rules' ? null : page === 'usage' ? null : <button className="button" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : refresh()}><RefreshCw size={15} />重新检查</button>}</div></div>}
+          <main className={'main-content' + (page === 'skills' ? ' skills-page' : page === 'settings' ? ' hub-settings-page' : '')}>
+            {!['market','ledger','settings'].includes(page) && <div className="page-heading"><div><h1>{title}{page !== 'skills' && <span className="heading-dot">.</span>}</h1><p>{subtitle}</p></div><div className="heading-actions">{page === 'overview' ? <div className="overview-date"><span className="today">{fmtDate(clock)}<span>{clock.toLocaleDateString('zh-CN', {weekday:'long',timeZone:'Asia/Shanghai'})}</span></span><small>工作台快照 {fmtDate(data.generated_at)} {fmtTime(data.generated_at)}</small></div> : page === 'projects' ? <button className="button primary" onClick={() => setModal({ type: 'new-project' })}><Plus size={16} />添加工程</button> : page === 'skills' ? <button className="button primary" onClick={() => setModal({ type: 'new-skill' })}><Plus size={16} />新建技能草稿</button> : page === 'rules' ? null : page === 'usage' ? null : <button className="button" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : refresh()}><RefreshCw size={15} />重新检查</button>}</div></div>}
             {error && <div className="inline-error">{error}，当前展示上次读取的数据。</div>}
             {page !== 'ledger' && deleteFailures.length > 0 && <div className="ledger-sync-errors" role="alert">
               <header><strong>{deleteFailures.length} 条记录删除待处理</strong>
                 <button type="button" className="text-button" onClick={() => navigate('ledger')}>查看失败原因<ArrowRight size={14}/></button>
               </header>
             </div>}
-            {page === 'ledger' && <LedgerPage sinkDone={layout.sinkDone} route={params} projects={data.projects} navigate={next => navigate('ledger', next)} />}
+            {page === 'settings' && <WorkspaceSettings section={params.section} onNavigate={section => navigate('settings', { section })} hidden={hiddenModules} toggleModule={toggleModule}
+              data={data} refresh={refresh} theme={theme} chooseTheme={chooseTheme} layout={layout} compact={compact} setCompact={setCompact}
+              rowHeight={rowHeight} setRowHeight={setRowHeight} motion={motion} setMotion={setMotion}/>}
+            {page === 'ledger' && <LedgerPage sinkDone={layout.sinkDone} rowHeight={rowHeight} setRowHeight={setRowHeight} suggestionsAvailable={data.features?.task_suggestions}
+              route={params} projects={data.projects} syncAnchor={syncAnchor} navigate={next => navigate('ledger', next)}
+              onSyncHistory={() => { loadAttention(); navigate('changes', { section: 'tracker' }); }}/>}
             {page === 'market' && <MarketPage route={params} navigate={next => navigate('market', next)} />}
-            {page === 'usage' && <UsagePage onDiagnostics={() => setModal({ type: 'settings', diagnostics: true })} />}
+            {page === 'usage' && <UsagePage onDiagnostics={() => navigate('settings', { section: 'diagnostics' })}/>}
+            {page === 'changes' && params.section === 'tracker' && <section className="change-summary tracker-summary" aria-label="任务台账同步状态">
+              <div>
+                <h2>任务台账同步</h2>
+                <p>{attention.ledger?.synced_at ? '最近成功 ' + fmtDate(attention.ledger.synced_at) + ' ' + fmtTime(attention.ledger.synced_at) : '尚无成功记录'}</p>
+                {attention.ledger?.error && <p>{attention.ledger.error === true ? '暂时无法读取台账状态' : attention.ledger.error}</p>}
+                {attention.ledger?.sync?.pending > 0 && <p>{attention.ledger.sync.pending} 项正在后台同步</p>}
+              </div>
+              <button type="button" className="button" onClick={() => navigate('ledger')}>返回任务台账<ArrowRight size={15}/></button>
+            </section>}
             {page === 'overview' && <>
               <section className="attention" aria-label="待处理"><div className="section-heading"><h2>待处理</h2></div>{!attention.ready ? <p className="caption overview-empty">正在核对台账和商店。</p> : homeItems.length ? <div className="attention-list">{homeItems.map(item => <button key={item.id} onClick={() => navigate(item.page, item.params)}><span><strong>{item.title}</strong><small>{item.detail}</small></span><ArrowRight size={16} /></button>)}</div> : <p className="caption overview-empty">今天没有要处理的事。</p>}</section>
               <div className="section-heading"><h2>继续工作<span>{homeProjects.length}</span></h2><button className="text-button" onClick={() => navigate('projects')}>查看全部<ArrowRight size={14} /></button></div>
@@ -339,7 +425,7 @@ function App() {
             </>}
             {page === 'rules' && <RulesPage route={params} notify={notify} onSaved={() => refresh(false)} />}
             {page === 'changes' && <><div className="change-summary"><div><h2>{data.changes.length ? `${data.changes.length} 个文件待整理` : '工作区保持整洁'}</h2><p><GitBranch size={14} />{data.projects.find(p => p.id === 'hub')?.branch || '未检测到分支'}<span>·</span>仅本地，不自动提交</p></div><button className="button primary" onClick={() => setModal({ type: 'sync' })}><Link2 size={15} />检查同步计划</button></div><div className="section-heading"><h2>当前变更<span>{data.changes.length}</span></h2><Badge>只读检查</Badge></div><div className="change-list">{data.changes.map(change => <div key={change.path}><span className={`change-letter ${change.status.includes('?') ? 'new' : ''}`}>{change.status.includes('?') ? '+' : change.status}</span><FileCode2 size={16} /><code>{change.path}</code><Badge>{change.status.includes('?') ? '未跟踪' : '已修改'}</Badge></div>)}</div>{!data.changes.length && <div className="clean-state"><CheckCheck size={24} /><p>所有来源文件已提交，没有待整理变更。</p></div>}<div className="section-heading"><h2>提交记录</h2><History size={16} className="muted" /></div><div className="history-list">{data.history.map(item => <div key={item.hash}><span className="timeline-dot"><GitCommitHorizontal size={16} /></span><div><h3>{item.message}</h3><p>{fmtDate(item.date)} · {fmtTime(item.date)}</p></div><button className="commit-hash" onClick={() => copy(item.hash)}>{item.hash}<Copy size={12} /></button></div>)}</div><div className="maintenance-actions"><button onClick={() => setModal({ type: 'migration' })}><ArrowDownToLine size={20} /><span><strong>迁移与恢复</strong><small>查看导出、校验及恢复方式</small></span><ArrowUpRight size={16} /></button><a href="https://github.com/1848991298/ai-hub#readme" target="_blank" rel="noreferrer"><BookOpen size={20} /><span><strong>项目维护档案</strong><small>前往飞书查看已确认的记录</small></span><ArrowUpRight size={16} /></a></div></>}
-            {!['usage','market','ledger'].includes(page) && <footer className="page-footer"><span><span className="live-dot" />本地数据 · {fmtTime(data.generated_at)} 读取</span></footer>}
+            {!['usage','market','ledger','settings'].includes(page) && <footer className="page-footer"><span><span className="live-dot" />本地数据 · {fmtTime(data.generated_at)} 读取</span></footer>}
           </main>
           {showInspector && <><PanelResize label="调整详情栏宽度" controls="workspace-inspector" direction={-1} value={layout.inspectorWidth} minimum={280} maximum={Math.max(280, Math.min(560, layout.viewportWidth - layout.sidebarSpan - 367))} defaultValue={340} onChange={value => layout.update('inspectorWidth', value)} /><aside id="workspace-inspector" className="inspector"><div className="inspector-heading"><span>资源详情</span><IconButton title="收起详情" onClick={() => setInspector(false)}><PanelRightClose size={16} /></IconButton></div>
             {selectedProject && <><div className="detail-intro"><span className={`resource-icon hero ${selectedProject.color}`}><Icon name={selectedProject.icon} size={29} /></span><h2>{selectedProject.name}</h2><p>{selectedProject.subtitle}</p><Badge tone={selectedProject.exists ? 'sage' : 'amber'} dot>{selectedProject.exists ? '本地工程可读取' : '路径待检查'}</Badge></div><div className="detail-section"><h3>工程信息</h3><dl><div><dt>登记仓库</dt><dd>{selectedProject.repository}</dd></div><div><dt>当前分支</dt><dd className="branch-value"><button className="project-branch-trigger" disabled={!selectedProject.is_git} onClick={() => setModal({type:'branches',id:selectedProject.id})}><GitBranch size={12}/><span>{selectedProject.branch || '无 Git 分支'}</span><ChevronDown size={12}/></button></dd></div><div><dt>Worktrees</dt><dd>{selectedProject.worktrees}</dd></div><div><dt>工作区变更</dt><dd>{selectedProject.changes == null ? '待核实' : selectedProject.changes ? `${selectedProject.changes} 项` : '整洁'}</dd></div></dl><p className="project-source-caption">{selectedProject.platform_source}</p>{selectedProject.is_git && <button className="button" onClick={() => setModal({type:'branches',id:selectedProject.id})}><GitBranch size={14}/>查看 Git 详情</button>}<button className="path-copy" onClick={() => copy(selectedProject.path)}><Folder size={14} /><code>{shortPath(selectedProject.path)}</code><Copy size={13} /></button></div><div className="detail-section"><h3>建议关联的能力<Badge>预览配置</Badge></h3><div className="related-skills">{selectedProject.skills.map(id => data.skills.find(s => s.id === id)).filter(Boolean).map(s => <button key={s.id} onClick={() => { navigate('skills'); select('skill', s.id); }}><span className={`resource-icon mini ${colors[s.category]}`}><Icon name={s.icon} size={14} /></span><span>{s.title}</span><ChevronRight size={13} /></button>)}</div></div><div className="detail-section"><h3>规则来源</h3><button className="linked-rule" onClick={() => { navigate('rules'); }}><FileText size={16} /><div><strong>共享全局规则</strong><small>~/.ai-hub/rules/global.md</small></div><ArrowUpRight size={13} /></button><p className="caption">此处展示 Hub 共享规则；工程独有规则尚未扫描。</p></div>{selectedProject.document && <a className="detail-link" href={selectedProject.document} target="_blank" rel="noreferrer"><BookOpen size={15} />打开飞书项目档案<ArrowUpRight size={14} /></a>}</>}
@@ -360,24 +446,21 @@ function App() {
       </>}
     </div>
     {toast && <div role="status" className="toast"><Check size={16} />{toast}</div>}
-    {modal && <Modal key={modal.type + (modal.id || '')} ledger={attention.ledger} onProjectAdded={async project => { await refresh(false); navigate('projects'); select('project',project.id,'projects'); setModal(null); notify('工程已添加，网页版与 App 共用本机清单'); }} layout={layout} modal={modal} data={data} drafts={drafts} notify={notify} copy={copy} close={() => setModal(null)} navigate={navigate} theme={theme} chooseTheme={chooseTheme} compact={compact} setCompact={value => { setCompact(value); localStorage.setItem('ai-hub-compact', String(value)); }} refresh={refresh} />}
+    {modal && <Modal key={modal.type + (modal.id || '')} onProjectAdded={async project => { await refresh(false); navigate('projects'); select('project',project.id,'projects'); setModal(null); notify('工程已添加，网页版与 App 共用本机清单'); }} modal={modal} data={data} drafts={drafts} notify={notify} copy={copy} close={() => setModal(null)} navigate={navigate} />}
     {mobileNav && <div className="nav-scrim" onClick={() => setMobileNav(false)} />}
   </div>;
 }
 
-function Modal({ onProjectAdded, layout, modal, data, ledger, drafts, close, notify, copy, navigate, compact, setCompact, theme, chooseTheme, refresh }) {
+function Modal({ onProjectAdded, modal, data, drafts, close, notify, copy, navigate }) {
   const [value, setValue] = useState(() => getDraft(modal.id) ?? modal.source ?? '');
   const [tab, setTab] = useState('preview');
   const [form, setForm] = useState({ name: '', path: '', description: '' });
-  const [person, setPerson] = useState(() => data?.profile || { name: '', mark: '', subtitle: '' });
-  const [diag, setDiag] = useState(null);
   const dialogRef = useRef();
-  const searchRef = useRef();
   useEffect(() => {
     const previousFocus = document.activeElement;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    (searchRef.current || dialogRef.current?.querySelector('button,input,textarea'))?.focus({ preventScroll: true });
+    dialogRef.current?.querySelector('button,input,textarea')?.focus({ preventScroll: true });
     return () => { document.body.style.overflow = overflow; previousFocus?.focus?.({ preventScroll: true }); };
   }, []);
   useEffect(() => {
@@ -393,33 +476,12 @@ function Modal({ onProjectAdded, layout, modal, data, ledger, drafts, close, not
     addEventListener('keydown', keys);
     return () => removeEventListener('keydown', keys);
   }, [value]);
-  useEffect(() => {
-    if (modal.type !== 'settings') return undefined;
-    let active = true;
-    fetch('/api/diagnostics').then(response => response.ok ? response.json() : null).then(value => { if (active && value) setDiag(value); }).catch(() => {});
-    return () => { active = false; };
-  }, [modal.type]);
-  useEffect(() => {
-    if (modal.diagnostics && diag) dialogRef.current?.querySelector('.settings-status')?.scrollIntoView({ block: 'start' });
-  }, [diag, modal.diagnostics]);
-  async function savePerson(event) {
-    event.preventDefault();
-    try {
-      const response = await fetch('/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(person) });
-      if (!response.ok) throw new Error();
-      notify('显示名已保存在这台电脑');
-      refresh?.(false);
-    } catch { notify('显示名没保存'); }
-  }
   function saveDraft() { try { localStorage.setItem('ai-hub-draft:' + modal.id, value); notify('草稿已保存在此浏览器，来源文件未修改'); } catch { notify('浏览器无法保存草稿，请复制后保留'); } }
-  const title = modal.type === 'editor' ? modal.title : ({ search: '快速查找', sync: '文件映射状态', settings: '工作台设置', about: '关于 AI Hub', migration: '迁移与恢复', branches:'Git 详情', 'new-project': '添加工程', 'new-skill': '新建技能草稿', drafts: '资源草稿箱' }[modal.type] || 'AI Hub');
-  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><section ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} className={`modal ${modal.type === 'editor' ? 'editor-modal' : ''} ${modal.type === 'search' ? 'search-modal' : ''} ${modal.type === 'branches' ? 'project-git-modal' : ''}`}><div className="modal-header"><div><h2>{title}</h2></div><IconButton title="关闭弹窗" onClick={close}><X size={19} /></IconButton></div>
-      {modal.type === 'search' && data && <QuickFind data={data} ledger={ledger} inputRef={searchRef} onPick={(page, params) => { navigate(page, params); close(); }}/>}
+  const title = modal.type === 'editor' ? modal.title : ({ sync: '文件映射状态', migration: '迁移与恢复', branches:'Git 详情', 'new-project': '添加工程', 'new-skill': '新建技能草稿', drafts: '资源草稿箱' }[modal.type] || 'AI Hub');
+  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><section ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} className={`modal ${modal.type === 'editor' ? 'editor-modal' : ''} ${modal.type === 'branches' ? 'project-git-modal' : ''}`}><div className="modal-header"><div><h2>{title}</h2></div><IconButton title="关闭弹窗" onClick={close}><X size={19} /></IconButton></div>
       {modal.type === 'editor' && <><div className="editor-toolbar"><div className="segmented">{[['preview','阅读预览'],['edit','编辑草稿'],['diff','草稿差异']].map(([id,label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}</div><Badge tone="amber">仅浏览器草稿</Badge></div><div className="editor-path"><FileText size={13} /><code>{shortPath(modal.path)}</code></div><div className="editor-content">{tab === 'preview' ? <Markdown>{value.replace(/^---\n[\s\S]*?\n---\n/, '')}</Markdown> : tab === 'edit' ? <textarea aria-label="Markdown 草稿编辑器" spellCheck={false} value={value} onChange={event => setValue(event.target.value)} /> : <div className="draft-diff"><div><h3>来源文件</h3><pre>{modal.source}</pre></div><div><h3>当前草稿<Badge>{value === modal.source ? '无差异' : '内容有变化'}</Badge></h3><pre>{value}</pre></div></div>}</div><div className="editor-footer"><span><HardDrive size={14} />草稿不会改动共享正文</span><div><button className="button" onClick={() => { setValue(modal.source); notify('编辑区已恢复来源内容，保存后更新浏览器草稿'); }}>恢复来源内容</button><button className="button primary" onClick={saveDraft}><Check size={15} />保存草稿<kbd>⌘ S</kbd></button></div></div></>}
       {modal.type === 'sync' && <div className="modal-body"><div className="modal-info"><ShieldCheck size={20} /><p>只读 · 显示各技能的文件映射结果</p></div><div className="sync-table"><div><strong>技能</strong><strong>Cursor</strong><strong>Codex</strong><strong>Codex 通用目录</strong></div>{data.skills.map(skill => <div key={skill.id}><code>{skill.id}</code>{skill.mappings.map(m => <span key={m.client} className={m.mapped ? 'green-text' : 'amber-text'}>{m.mapped ? <Check size={16} /> : <CircleHelp size={16} />}{m.mapped ? '已映射' : '待检查'}</span>)}</div>)}</div><button className="button" onClick={() => copy('bash "$HOME/.ai-hub/scripts/pull.sh" --check')}><Copy size={15} />复制命令行预检命令</button></div>}
-      {modal.type === 'settings' && <div className="modal-body"><section className="theme-section"><h3>外观主题</h3><p>选择适合你的工作氛围，网页版与 App 共用外观设置。</p><div className="theme-grid" role="radiogroup" aria-label="外观主题">{themes.map(item => <button key={item.id} className="theme-option" role="radio" aria-checked={theme === item.id} aria-label={item.name} onClick={() => chooseTheme(item.id)}><span className="theme-sample" aria-hidden="true" style={{'--sample-canvas':item.canvas,'--sample-sidebar':item.sidebar,'--sample-text':item.text,'--sample-accent':item.accent}}><span className="sample-nav"><i/><i/><i/><i/></span><span className="sample-main"><i/><i/><i/><i/></span></span><span className="theme-label"><span><strong>{item.name}</strong><small>{item.description}</small></span>{theme === item.id && <Check size={17}/>}</span></button>)}</div></section><form className="settings-profile" onSubmit={savePerson}><h3>显示名</h3><p>只改这台电脑上的侧栏。规则里的称呼不跟着变。</p><label>名字<input value={person.name} maxLength={40} onChange={event => setPerson({ ...person, name: event.target.value })} /></label><label>头像字<input value={person.mark} maxLength={2} onChange={event => setPerson({ ...person, mark: event.target.value })} /></label><label>一句话<input value={person.subtitle} maxLength={40} onChange={event => setPerson({ ...person, subtitle: event.target.value })} /></label><button className="button primary" type="submit">保存显示名</button></form><section className="settings-status"><h3>缓存和日志</h3>{(diag?.caches || []).map(item => <div className="settings-line" key={item.id}><div><strong>{item.label}</strong><p>{item.detail}</p><p>{item.updated ? `上次写入 ${item.updated}` : '还没有缓存'}</p></div></div>)}{(diag?.sources || []).map(item => <div className="settings-line" key={item.id}><div><strong>{item.label}</strong><p>{item.detail}</p></div><Badge tone={item.used ? 'sage' : ''}>{item.used ? '在用' : '不接入'}</Badge></div>)}<p className="caption">服务日志 {diag?.log_path || '~/Library/Logs/AI Hub/service.log'}</p><pre className="settings-log">{diag?.log?.length ? diag.log.join('\n') : '还没有服务日志。'}</pre></section><div className="settings-line"><div><strong>界面字号</strong><p>系统字体 · 中文采用系统中文字体</p></div><div className="layout-setting-controls"><div className="segmented" role="group" aria-label="界面字号">{[[13,'紧凑'],[14,'标准'],[15,'清晰']].map(([size,label]) => <button key={size} aria-pressed={layout.fontSize === size} className={layout.fontSize === size ? 'active' : ''} onClick={() => layout.update('fontSize',size)}>{label} {size}</button>)}</div></div></div><div className="settings-line"><div><strong>面板布局</strong><p>拖动分隔线调整左右栏，双击恢复默认。</p></div><button className="button" onClick={() => { layout.reset(); notify('已恢复默认面板宽度'); }}>恢复默认布局</button></div><div className="settings-line"><div><strong>紧凑显示</strong><p>减少列表间距，查看更多资源。</p></div><button className={`switch ${compact ? 'enabled' : ''}`} role="switch" aria-checked={compact} aria-label="紧凑显示" onClick={() => setCompact(!compact)}><span /></button></div><div className="settings-line"><div><strong>已完成沉底</strong><p>问题和任务中，已完成的记录排在当前排序底部。关掉后按表头排序。</p></div><button className={`switch ${layout.sinkDone ? 'enabled' : ''}`} role="switch" aria-checked={layout.sinkDone} aria-label="已完成沉底" onClick={() => layout.update('sinkDone', !layout.sinkDone)}><span /></button></div><div className="settings-line"><div><strong>Hub 维护源</strong><p>{data?.hub_root || '~/.ai-hub'}</p></div><HardDrive size={19} /></div><div className="settings-line"><div><strong>当前模式</strong><p>规则保存到 Hub 并同步；技能编辑仍为浏览器草稿</p></div><Badge tone="sage">本机</Badge></div><p className="caption">规则在打开、重新聚焦与切换页面时检查同步；工程列表读取本机登记。</p></div>}
       {modal.type === 'drafts' && <div className="modal-body"><p className="caption draft-note">以下信息仅存于此浏览器，尚未加入工程登记或技能来源。</p>{drafts.map((draft, index) => <div className="resource-draft" key={draft.created_at + index}><div><Badge tone="sage">{draft.type === 'new-project' ? '工程草稿' : '技能草稿'}</Badge><h3>{draft.name}</h3><p>{draft.path}</p>{draft.description && <p>{draft.description}</p>}<small>{fmtDate(draft.created_at)} · {fmtTime(draft.created_at)}</small></div><IconButton title="复制资源草稿" onClick={() => copy(JSON.stringify(draft, null, 2))}><Copy size={16} /></IconButton></div>)}</div>}
-      {modal.type === 'about' && <div className="modal-body about"><span className="brand-mark"><Blocks size={29} /></span><h2>围绕你的工作方式。</h2><p>AI Hub 把工程、Skills、Rules 和各客户端的读取位置连接起来。文件保留开放格式，界面提供清晰的管理入口。</p><Badge tone="sage">0.7.0 · Web 与 macOS 工作台</Badge></div>}
       {modal.type === 'migration' && <div className="modal-body"><p>现有 Hub 已有导出与恢复脚本。这版界面提供命令入口，实际操作继续由命令行执行。</p><div className="command-block"><code>python3 scripts/hub.py export --output /目标目录/ai-hub.tar.gz</code><IconButton title="复制导出命令" onClick={() => copy('python3 scripts/hub.py export --output /目标目录/ai-hub.tar.gz')}><Copy size={15} /></IconButton></div><div className="command-block"><code>python3 scripts/hub.py restore --backup .backups/实际批次</code><IconButton title="复制恢复预检命令" onClick={() => copy('python3 scripts/hub.py restore --backup .backups/实际批次')}><Copy size={15} /></IconButton></div><p className="caption">恢复命令默认只核对。移动 Hub 后使用 --relocate 重建固定入口；完整说明见 docs/portability.md。</p></div>}
       {modal.type === 'new-project' && <ProjectAdd onAdded={onProjectAdded} onExisting={id=>{navigate('projects', { resource: id });close();}}/>}
       {modal.type === 'branches' && <ProjectGit key={modal.id} projectId={modal.id}/>}

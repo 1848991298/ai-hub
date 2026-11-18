@@ -21,6 +21,7 @@ from project_hub import ProjectService, ProjectError, git as project_git
 from rules_hub import RulesService, RulesError
 from market_server import MarketBridge, handle_market
 from tracker_hub import TrackerService, handle_tracker
+from task_suggestions import SuggestionError, codex_executable, suggest
 
 ROOT = Path(os.environ.get('AI_HUB_ROOT', Path(__file__).resolve().parent.parent)).expanduser().resolve()
 THEMES = {'graphite', 'midnight', 'forest', 'plum'}
@@ -278,7 +279,7 @@ def snapshot():
         if len(parts) == 3:
             history.append(dict(hash=parts[0], message=parts[1], date=parts[2]))
     return dict(generated_at=now, hub_root=str(ROOT), mode='规则可保存并同步', preferences=preferences(), profile=profile(),
-                projects=projects, skills=skills, features={'task_context': True},
+                projects=projects, skills=skills, features={'task_context': True, 'task_suggestions': bool(codex_executable())},
                 rules=dict(path=str(rule_path), source=source, sections=sections, modified=modified(rule_path)),
                 changes=changes, history=history)
 
@@ -369,6 +370,22 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == '/api/task-suggestions':
+            if not self.is_local_host() or self.headers.get('Origin') != f'http://{self.headers.get("Host")}':
+                self.send_error(403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if self.headers.get_content_type() != 'application/json' or not 0 < length <= 16000:
+                    raise SuggestionError('建议请求格式不合法。')
+                self.send_json(suggest(json.loads(self.rfile.read(length))))
+            except SuggestionError as error:
+                self.send_json({'error': str(error)}, error.status)
+            except (ValueError, TypeError):
+                self.send_json({'error': '建议请求格式不合法。'}, 400)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if path.startswith('/api/market/') or path.startswith('/api/tracker/'):
             if not self.is_local_host() or self.headers.get('Origin') != f'http://{self.headers.get("Host")}':
                 self.send_error(403)

@@ -696,6 +696,14 @@ class TrackerService:
             raise TrackerError(str(error), 409) from error
         return {'snapshot': self.snapshot()}
 
+    def queue_receipt(self, job_id):
+        if not re.fullmatch(r'[0-9a-f-]{8,64}', job_id):
+            raise TrackerError('缺少有效的操作编号。')
+        job = self.outbox.get(job_id)
+        if not job:
+            raise TrackerError('找不到这次同步，请返回台账核对。', 404)
+        return {'state': job['state'], 'error': job['error']}
+
     def _clean_patch(self, kind, values):
         if not isinstance(values, dict) or not values or set(values) - set(EDITABLE):
             raise TrackerError('没有可保存的字段，或包含不支持的字段。')
@@ -1041,6 +1049,10 @@ def handle_tracker(handler, service, post=False):
         if not post:
             if action == 'auth-status':
                 handler.send_json(service.authorization_status())
+                return
+            if action == 'receipt':
+                job_id = parse_qs(url.query).get('id', [''])[0]
+                handler.send_json(service.queue_receipt(job_id))
                 return
             if action == 'image':
                 query = parse_qs(url.query)
