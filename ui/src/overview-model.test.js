@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { attentionItems, connectedSpaces, pinnedSkills, recentProjects, storedPins, togglePin } from './overview-model.js';
+import { attentionItems, connectedSpaces, pinnedSkills, recentProjects, storedPins, togglePin, dueWeek } from './overview-model.js';
 
 const today = '2026-11-02';
 
@@ -53,4 +53,16 @@ test('钉住只保留仍存在的技能，再点一次取消', () => {
   assert.deepEqual(togglePin(['a'], 'b'), ['a', 'b']);
   assert.deepEqual(togglePin(['a', 'b'], 'a'), ['b']);
   assert.deepEqual(pinnedSkills([{ id: 'a' }, { id: 'b' }], ['b', 'gone', 'a']).map(item => item.id), ['b', 'a']);
+});
+
+test('week groups active records across the year boundary and keeps archived records out', () => {
+  const ledger = { synced_at: '2026-01-01T12:00:00Z', issues: [{ due: '2025-12-30', status: '开发中' }],
+    tasks: [{ due: '2026-01-01', status: '已完成' }, { due: '2026-01-04', archived: true, status: '未启动' }] };
+  const week = dueWeek(ledger, '2026-01-01');
+  assert.equal(week.days[0].date, '2025-12-29');
+  assert.equal(week.days[6].date, '2026-01-04');
+  assert.deepEqual(week.days.map(day => day.rows.length), [0, 1, 0, 1, 0, 0, 0]);
+  assert.equal(week.total, 2);
+  assert.equal(week.overdue, 1);
+  assert.equal(dueWeek({ error: 'timeout' }, '2026-01-04').available, false);
 });

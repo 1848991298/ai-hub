@@ -1,0 +1,55 @@
+
+.overview-week {
+  display: grid;
+  grid-template-columns: minmax(154px, .8fr) minmax(0, 3fr);
+  margin-bottom: 20px;
+  border-radius: var(--hub-panel-radius);
+  overflow: hidden;
+  background: #203247;
+  color: #f8fbff;
+}
+.overview-week-summary { padding: 15px 20px; border-inline-end: 1px solid #ffffff29; }
+.overview-week-summary > span { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
+.overview-week-summary strong { display: block; font-size: 42px; font-weight: 600; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.overview-week-summary small, .overview-week-summary time { color: #d2deec; font-size: var(--text-xs); }
+.overview-week-days { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap: 4px; padding: 12px; }
+.overview-week-days button { display: grid; place-content: center; justify-items: center; min-width: 0; border-radius: 9px; padding: 6px 0; color: #e5effa; font: inherit; }
+.overview-week-days button:hover { background: #ffffff17; }
+.overview-week-days button[aria-pressed="true"] { background: #d3e7fe; color: #213b59; }
+.overview-week-days button:focus-visible { outline: 2px solid #9bcafa; outline-offset: -2px; }
+.overview-week-days strong { font-size: clamp(19px, 2.15vw, 30px); font-weight: 550; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.overview-week-days span, .overview-week-days small { font-size: var(--text-xs); }
+.overview-work { display: grid; align-items: start; grid-template-columns: minmax(0, 1.5fr) minmax(250px, 1fr); gap: 16px; }
+.overview-agenda { overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--hub-panel-radius); }
+.overview-agenda > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 16px; }
+.overview-agenda h2 { font-size: var(--text-lg); margin: 0; }
+.overview-agenda-row, .overview-agenda-more {
+  display: flex; width: 100%; min-height: 44px; align-items: center; gap: 9px; padding: 9px 16px;
+  text-align: start; border-top: 1px solid var(--border); color: var(--text);
+}
+.overview-agenda-row:hover, .overview-agenda-more:hover { background: var(--surface-hover); }
+.overview-agenda-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.overview-agenda-title strong { display: block; font-size: var(--text-base); font-weight: 600; }
+.overview-agenda-title small { display: block; margin-top: 3px; color: var(--text-muted); font-size: var(--text-xs); }
+.overview-agenda-status { color: var(--text-secondary); font-size: var(--text-xs); white-space: nowrap; }
+.overview-agenda-note { margin: 0; padding: 10px 16px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: var(--text-sm); }
+.overview-agenda-more { background: var(--surface-subtle); color: var(--accent); font-size: var(--text-sm); }
+.overview-agenda-more svg:last-child { margin-inline-start: auto; }
+.overview-work-side { display: grid; gap: 12px; min-width: 0; }
+.overview-work-side .section-heading { margin: 0 0 8px; }
+.overview-recent { min-width: 0; }
+.overview-recent > section { border: 1px solid var(--border); background: var(--surface); border-radius: var(--hub-panel-radius); overflow: hidden; }
+.overview-recent-row { display: flex; width: 100%; padding: 10px 13px; align-items: center; gap: 9px; text-align: start; }
+.overview-recent-row + .overview-recent-row { border-top: 1px solid var(--border); }
+.overview-recent-row:hover { background: var(--surface-hover); }
+.overview-recent-row span { flex: 1; min-width: 0; }
+.overview-recent-row strong, .overview-recent-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-recent-row code { margin-top: 3px; font-size: var(--text-xs); color: var(--text-muted); }
+@container (max-width: 660px) {
+  .overview-work { grid-template-columns: minmax(0, 1fr); }
+  .overview-week { grid-template-columns: minmax(0, 1fr); }
+  .overview-week-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 9px 12px; border-inline-end: 0; border-bottom: 1px solid #ffffff29; }
+  .overview-week-summary strong { font-size: 23px; }
+  .overview-week-summary time { margin-inline-start: auto; }
+  .overview-week-days { padding: 6px; gap: 2px; }
+}

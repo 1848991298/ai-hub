@@ -34,7 +34,18 @@ export function chartBuckets(dates, daily, metric) {
     const group=dates.slice(offset,offset+size), records=group.map(day=>rows.get(day)).filter(Boolean), values=records.map(row=>row[metric]).filter(known);
     const excluded = metric==='estimated_usd' && records.some(row=>row.pricing_complete===false);
     const missingReason = !records.length ? '当日未返回所选模型的用量' : excluded ? '有用量，含回退定价，未计入完整定价' : metric==='total_tokens' ? '来源未提供 token 数值' : '有用量，来源未提供此项费用';
-    result.push({start:group[0],end:group.at(-1),days:group.length,observed:values.length,value:values.length?values.reduce((a,b)=>a+b,0):null,excluded,missingReason});
+    const value = values.length ? values.reduce((a,b) => a+b, 0) : null;
+    let parts;
+    if (metric === 'total_tokens' && records.length && records.every(row =>
+      known(row.total_tokens) && known(row.input_tokens) && known(row.output_tokens) &&
+      row.input_tokens + row.output_tokens === row.total_tokens)) {
+      parts = {
+        input: records.reduce((sum, row) => sum + row.input_tokens, 0),
+        output: records.reduce((sum, row) => sum + row.output_tokens, 0),
+      };
+    }
+    result.push({ start: group[0], end: group.at(-1), days: group.length, observed: values.length,
+      value, excluded, missingReason, ...(parts ? { parts } : {}) });
   }
   return result;
 }

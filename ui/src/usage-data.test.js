@@ -67,3 +67,17 @@ test('完整定价空柱区分排除价格和没有用量，真实零值仍保�
   assert.equal(bars[1].excluded,true);
   assert.equal(bars[2].value,0);
 });
+
+test('token stacks require reconciled components and distinguish missing from zero', () => {
+  const dates = ['2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21'];
+  const rows = [
+    { date: dates[0], total_tokens: 100, input_tokens: 80, output_tokens: 20 },
+    { date: dates[1], total_tokens: 100, input_tokens: 80, output_tokens: 10 },
+    { date: dates[2], total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+  ];
+  const buckets = chartBuckets(dates, rows, 'total_tokens');
+  assert.deepEqual(buckets[0].parts, { input: 80, output: 20 });
+  assert.equal(buckets[1].parts, undefined);
+  assert.equal(buckets[2].value, 0);
+  assert.equal(buckets[3].value, null);
+});

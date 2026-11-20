@@ -1,5 +1,6 @@
 import { isOverdue } from './ledger-model.js';
 import { storeAlerts } from './market-board.js';
+import { recentDates } from './usage-data.js';
 
 const storeNames = { oppo: 'OPPO', vivo: 'vivo', xiaomi: '小米', tencent: '应用宝', honor: '荣耀' };
 
@@ -29,6 +30,22 @@ export function recentProjects(projects, visits, limit = 3) {
     .map(([id]) => known.get(id));
   const rest = projects.filter(project => !visited.some(item => item.id === project.id));
   return [...visited, ...rest].slice(0, limit);
+}
+
+export function dueWeek(ledger, today) {
+  const end = new Date(today + 'T12:00:00Z');
+  end.setUTCDate(end.getUTCDate() + (7 - end.getUTCDay()) % 7);
+  const dates = recentDates(end.toISOString().slice(0, 10), 7);
+  const records = [...(ledger?.issues || []), ...(ledger?.tasks || [])];
+  const available = Boolean(ledger?.synced_at || records.length ||
+    (Array.isArray(ledger?.issues) && Array.isArray(ledger?.tasks) && !ledger.error && !ledger.authorization_required));
+  const days = dates.map(date => ({ date, rows: records.filter(row => !row.archived && row.due === date) }));
+  return {
+    available,
+    days,
+    total: days.reduce((sum, day) => sum + day.rows.length, 0),
+    overdue: records.filter(row => isOverdue(row, today)).length,
+  };
 }
 
 export function attentionItems({ mapped, allMappings, changes, ledger, market, rules, today }) {

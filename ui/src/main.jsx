@@ -14,6 +14,7 @@ import './styles.css';
 import './themes.css';
 import './workspace.css';
 import './desktop.css';
+import OverviewSchedule from './OverviewSchedule.jsx';
 import UsagePage from './UsagePage.jsx';
 import QuickFind from './QuickFind.jsx';
 import { readRoute, routeHash } from './navigation.js';
@@ -40,7 +41,7 @@ const pages = [
   { id: 'market', label: '应用运营', icon: Store, group: '运行与维护' },
   { id: 'changes', label: '变更与同步', icon: GitCompare, group: '运行与维护' },
 ];
-const titles = { settings: ['工作台设置', ''], ledger: ['问题与任务', '查看、新增和修改飞书多维表格，并读回最新记录。'], market: ['应用运营', 'ISHO 的渠道版本、增长与业务数据。'], usage: ['用量中心', '看清每日消耗，掌握账号余量。'], overview: ['工作台', '今天要处理的事，以及最近打开的工程。'], projects: ['工程合集', '在一个地方，找到你的每一个工作空间。'], skills: ['Skills', 'Cursor 和 Codex 共用一份技能来源。'], rules: ['Rules', '一份清晰的约定，贯穿每一次协作。'], changes: ['变更与同步', '每一次修改，都有迹可循。'] };
+const titles = { settings: ['工作台设置', ''], ledger: ['问题与任务', '查看、新增和修改飞书多维表格，并读回最新记录。'], market: ['应用运营', 'ISHO 的渠道版本、增长与业务数据。'], usage: ['用量中心', '看清每日消耗，掌握账号余量。'], overview: ['工作台', ''], projects: ['工程合集', '在一个地方，找到你的每一个工作空间。'], skills: ['Skills', 'Cursor 和 Codex 共用一份技能来源。'], rules: ['Rules', '一份清晰的约定，贯穿每一次协作。'], changes: ['变更与同步', '每一次修改，都有迹可循。'] };
 const readers = [['Cursor', Code2], ['Codex', Blocks], ['Agents', Bot]];
 const readerLabel = name => name === 'Agents' ? 'Codex 通用目录' : name;
 const currentRoute = () => {
@@ -277,7 +278,7 @@ function App() {
     return { name, ReaderIcon, mapped: found.filter(m => m.mapped).length, total: found.length, folder: found[0]?.path.replace(/\/[^/]+$/, '') };
   });
   const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(clock);
-  const homeItems = data && attention.ready ? attentionItems({ mapped, allMappings, changes: data.changes, ledger: attention.ledger, market: attention.market, rules: attention.rules, today }) : [];
+  const homeItems = data && attention.ready ? attentionItems({ mapped, allMappings, changes: data.changes, ledger: attention.ledger, market: attention.market, rules: attention.rules, today }).filter(item => item.id !== 'overdue') : [];
   const homeSpaces = data && attention.ready ? connectedSpaces({ projects: data.projects, skills: data.skills, ledger: attention.ledger, market: attention.market }) : [];
   const homeProjects = data ? recentProjects(data.projects, visits) : [];
   const homeSkills = data ? pinnedSkills(data.skills, pins) : [];
@@ -378,7 +379,7 @@ function App() {
       {!data ? <div className="loading-page">{error ? <><HardDrive size={30} /><h2>本地服务尚未连接</h2><p>{error}</p><button className="button primary" onClick={() => refresh(false)}>重新连接</button></> : <><LoaderCircle className="spin" size={25} /><p>正在整理你的工作空间…</p></>}</div> : <>
         <div className={`workspace-body ${showInspector ? 'with-inspector' : ''}`}>
           <main className={'main-content' + (page === 'skills' ? ' skills-page' : '')}>
-            {!['market','ledger'].includes(page) && <div className="page-heading"><div><h1>{title}{page !== 'skills' && <span className="heading-dot">.</span>}</h1><p>{subtitle}</p></div><div className="heading-actions">{page === 'overview' ? <div className="overview-date"><span className="today">{fmtDate(clock)}<span>{clock.toLocaleDateString('zh-CN', {weekday:'long',timeZone:'Asia/Shanghai'})}</span></span><small>工作台快照 {fmtDate(data.generated_at)} {fmtTime(data.generated_at)}</small></div> : page === 'projects' ? <button className="button primary" onClick={() => setModal({ type: 'new-project' })}><Plus size={16} />添加工程</button> : page === 'skills' ? <button className="button primary" onClick={() => setModal({ type: 'new-skill' })}><Plus size={16} />新建技能草稿</button> : page === 'rules' ? null : page === 'usage' ? null : <button className="button" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : refresh()}><RefreshCw size={15} />重新检查</button>}</div></div>}
+            {!['market','ledger'].includes(page) && <div className="page-heading"><div><h1>{title}{!['skills','overview','usage'].includes(page) && <span className="heading-dot">.</span>}</h1>{subtitle && <p>{subtitle}</p>}</div><div className="heading-actions">{page === 'overview' ? <div className="overview-date"><span className="today">{fmtDate(clock)}<span>{clock.toLocaleDateString('zh-CN', {weekday:'long',timeZone:'Asia/Shanghai'})}</span></span><small>工作台快照 {fmtDate(data.generated_at)} {fmtTime(data.generated_at)}</small></div> : page === 'projects' ? <button className="button primary" onClick={() => setModal({ type: 'new-project' })}><Plus size={16} />添加工程</button> : page === 'skills' ? <button className="button primary" onClick={() => setModal({ type: 'new-skill' })}><Plus size={16} />新建技能草稿</button> : page === 'rules' ? null : page === 'usage' ? null : <button className="button" onClick={() => page === 'usage' ? dispatchEvent(new Event('ai-hub-refresh-usage')) : refresh()}><RefreshCw size={15} />重新检查</button>}</div></div>}
             {error && <div className="inline-error">{error}，当前展示上次读取的数据。</div>}
             {page !== 'ledger' && deleteFailures.length > 0 && <div className="ledger-sync-errors" role="alert">
               <header><strong>{deleteFailures.length} 条记录删除待处理</strong>
@@ -400,9 +401,24 @@ function App() {
               <button type="button" className="button" onClick={() => navigate('ledger')}>返回任务台账<ArrowRight size={15}/></button>
             </section>}
             {page === 'overview' && <>
-              <section className="attention" aria-label="待处理"><div className="section-heading"><h2>待处理</h2></div>{!attention.ready ? <p className="caption overview-empty">正在核对台账和商店。</p> : homeItems.length ? <div className="attention-list">{homeItems.map(item => <button key={item.id} onClick={() => navigate(item.page, item.params)}><span><strong>{item.title}</strong><small>{item.detail}</small></span><ArrowRight size={16} /></button>)}</div> : <p className="caption overview-empty">今天没有要处理的事。</p>}</section>
-              <div className="section-heading"><h2>继续工作<span>{homeProjects.length}</span></h2><button className="text-button" onClick={() => navigate('projects')}>查看全部<ArrowRight size={14} /></button></div>
-              {homeProjects.length ? <div className="project-grid">{homeProjects.map(projectCard)}</div> : <p className="caption overview-empty">还没有登记工程。<button className="text-button" onClick={() => setModal({ type: 'new-project' })}>添加工程</button></p>}
+              <OverviewSchedule ledger={attention.ledger} today={today} navigate={navigate}>
+                <div className="overview-recent">
+                  <div className="section-heading"><h2>继续工作</h2><button className="text-button" onClick={() => navigate('projects')}>工程合集<ArrowRight size={14}/></button></div>
+                  {homeProjects.length ? <section aria-label="最近工程">{homeProjects.map(project =>
+                    <button className="overview-recent-row" key={project.id} onClick={() => {
+                      select('project', project.id, 'projects');
+                      navigate('projects', { resource: project.id });
+                    }}>
+                      <Icon name={project.icon} size={17}/><span><strong>{project.name}</strong>
+                        <code>{project.branch || project.subtitle}</code></span><ChevronRight size={15}/>
+                    </button>
+                  )}</section> : <button className="text-button" onClick={() => setModal({ type: 'new-project' })}>添加工程<Plus size={14}/></button>}
+                </div>
+                {homeItems.length > 0 && <section className="attention" aria-label="需要核对">
+                  <div className="section-heading"><h2>需要核对</h2></div>
+                  <div className="attention-list">{homeItems.map(item => <button key={item.id} onClick={() => navigate(item.page, item.params)}><span><strong>{item.title}</strong><small>{item.detail}</small></span><ArrowRight size={16}/></button>)}</div>
+                </section>}
+              </OverviewSchedule>
               <div className="section-heading skills-section"><h2>钉住的技能<span>{homeSkills.length}</span></h2><button className="text-button" onClick={() => navigate('skills')}>浏览技能库<ArrowRight size={14} /></button></div>
               {homeSkills.length ? <div className="skills-list">{homeSkills.map(skillRow)}</div> : <p className="caption overview-empty">在技能页钉住后，会出现在这里。</p>}
               {!!homeSpaces.length && <details className="overview-sources"><summary>已接入的数据来源</summary><div className="attention-list">{homeSpaces.map(item => <button key={item.id} onClick={() => navigate(item.page)}><span><strong>{item.title}</strong><small>{item.detail}</small></span><ArrowRight size={16}/></button>)}</div></details>}

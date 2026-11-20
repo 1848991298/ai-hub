@@ -131,26 +131,78 @@ function useBackdropDismiss(enabled, dismiss) {
   };
 }
 
-export function RecordDrawer({ title, subtitle, onClose, onPaste, busy, reading, initialFocus, animate, children }) {
+export function RecordInspector({ recordKey, title, subtitle, onClose, onPaste, noteFocus, tabs, children }) {
   const dialog = useRef(null);
   const heading = useRef(null);
   const titleId = useId();
-  const backdrop = useBackdropDismiss(reading && !busy, onClose);
+  const backdrop = useBackdropDismiss(true, onClose);
+  useLayoutEffect(() => {
+    const element = dialog.current;
+    const workspace = element.parentElement;
+    function fit() {
+      const floating = workspace.clientWidth < 920;
+      if (element.open && floating === (element.dataset.floating === 'true')) return;
+      if (document.querySelector('dialog:modal:not(#ledger-inspector)')) return;
+      if (element.open) element.close();
+      element.dataset.floating = String(floating);
+      if (floating) element.showModal();
+      else element.show();
+      heading.current.focus({ preventScroll: true });
+    }
+    fit();
+    const resize = new ResizeObserver(fit);
+    resize.observe(workspace);
+    document.addEventListener('close', fit, true);
+    return () => {
+      document.removeEventListener('close', fit, true);
+      resize.disconnect();
+      element.close();
+    };
+  }, []);
+  useLayoutEffect(() => {
+    const target = noteFocus?.current || heading.current;
+    target.focus({ preventScroll: true });
+    if (noteFocus?.current) target.scrollIntoView({ block: 'nearest' });
+  }, [recordKey, noteFocus]);
+  return <dialog ref={dialog} id="ledger-inspector" className="ledger-inspector" aria-labelledby={titleId}
+    onPaste={onPaste} {...backdrop}
+    onCancel={event => {
+      if (event.target !== event.currentTarget) return;
+      event.preventDefault();
+      onClose();
+    }}
+    onKeyDown={event => {
+      if (event.key !== 'Escape' || event.defaultPrevented ||
+        event.target.closest('dialog') !== event.currentTarget || event.currentTarget.dataset.floating === 'true') return;
+      event.preventDefault();
+      onClose();
+    }}>
+    <header className="ledger-inspector-head">
+      <div><div className="ledger-inspector-meta">{subtitle}</div><h2 id={titleId} tabIndex={-1} ref={heading}>{title}</h2></div>
+      <button type="button" className="ledger-close" aria-label="关闭记录侧栏" onClick={onClose}><X size={18}/></button>
+    </header>
+    {tabs}
+    {children}
+  </dialog>;
+}
+
+export function RecordDrawer({ title, onClose, onPaste, busy, animate, children }) {
+  const dialog = useRef(null);
+  const heading = useRef(null);
+  const titleId = useId();
   useLayoutEffect(() => {
     const element = dialog.current;
     element.showModal();
     return () => element.close();
   }, []);
   useLayoutEffect(() => {
-    const target = initialFocus?.current || heading.current;
-    target.focus({ preventScroll: true });
-    if (target !== heading.current) target.scrollIntoView({ block: 'start' });
-  }, [initialFocus, title]);
-  return <dialog ref={dialog} className={`ledger-drawer${reading ? ' is-reading' : ''}`} data-animated={animate || undefined}
-    aria-labelledby={titleId} onPaste={onPaste} {...backdrop}
+    heading.current.focus({ preventScroll: true });
+  }, [title]);
+  return <dialog ref={dialog} className="ledger-drawer" data-animated={animate || undefined}
+    aria-labelledby={titleId} onPaste={onPaste}
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
     <header className="ledger-drawer-head">
-      <div><h2 id={titleId} ref={heading} tabIndex={-1}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
+      <h2 id={titleId} ref={heading} tabIndex={-1}>{title}</h2>
       <button type="button" className="ledger-close" aria-label="关闭记录详情" disabled={busy} onClick={onClose}><X size={19} aria-hidden="true"/></button>
     </header>
     {children}

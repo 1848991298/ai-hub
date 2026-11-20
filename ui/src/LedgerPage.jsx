@@ -4,7 +4,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ClipboardList, Colu
 import { blankForm, categoryOf, taskCategories, recordTypes, recordScope, draftWithType, canonicalStatus, changedFields, columnSequence, columnWidths, cycleFacet, cycleMode, defaultLedgerSort, emptyFilters, fillColumnWidths, filterRecords, isDone, isOverdue, knownTags, hasTag, mergeTags, tagKey, ledgerColumnDefaults, ledgerColumnLimits, ledgerColumnOrder, moveItem, nextSort, orderedRows, sortRecords, statuses, priorities, stretchLastColumn } from './ledger-model.js';
 import TaskContext from './TaskContext.jsx';
 import TaskAssistant from './TaskAssistant.jsx';
-import { RecordDrawer, RecordImages, RecordText, RecordTextarea, imageTypes, maxImageCount, maxImageSize, stageImage, useRecordPreview } from './LedgerRecord.jsx';
+import { RecordDrawer, RecordInspector, RecordImages, RecordText, RecordTextarea, imageTypes, maxImageCount, maxImageSize, stageImage, useRecordPreview } from './LedgerRecord.jsx';
 import { StatusLink, WorkspaceStatus } from './WorkspaceChrome.jsx';
 import './ledger.css';
 
@@ -299,6 +299,7 @@ function ColumnLayout({ columns, visibleColumns, hidden, widths, onWidth, onFit,
 export default function LedgerPage({ sinkDone = true, route = {}, projects = [], navigate, rowHeight, setRowHeight, suggestionsAvailable, syncAnchor, onSyncHistory }) {
   const { kind, type } = recordScope(route);
   const recordId = route.record || '';
+  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(route.due || '') ? route.due : '';
   const overdueMode = route.overdue === '1' ? 'include' : route.overdue === 'exclude' ? 'exclude' : null;
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -308,8 +309,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const [authOpen, setAuthOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('ai-hub-ledger-view') === 'board' ? 'board' : 'list');
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiSelection, setAiSelection] = useState('');
+  const [inspection, setInspection] = useState(null);
+  const inspectionTrigger = useRef(null);
   const aiTrigger = useRef(null);
   const [tagDraft, setTagDraft] = useState('');
   const [order, setOrder] = useState(() => savedValue('ai-hub-ledger-order') || {});
@@ -341,6 +342,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const columnDrag = useRef(null);
   const rowDrag = useRef(null);
   const [editor, setEditor] = useState(null);
+  useEffect(() => {
+    inspectionTrigger.current = null;
+    setInspection(route.inspect ? { key: route.inspect, tab: 'detail' } : null);
+  }, [kind, type, recordId, dueDate, route.archive, route.inspect]);
   const noteHeading = useRef(null);
   const syncErrors = useRef(null);
   const recordPreview = useRecordPreview();
@@ -428,15 +433,15 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
 
   function chooseType(next) {
     setFilters(current => ({ ...current, category: {} }));
-    navigate?.({ ...recordScope({ type: next, kind: next === '任务' ? 'task' : 'all' }), overdue: route.overdue });
+    navigate?.({ ...recordScope({ type: next, kind: next === '任务' ? 'task' : 'all' }), overdue: route.overdue, due: dueDate, archive: route.archive });
   }
   function changeOverdue(next) {
     setFilters(current => ({ ...current, overdue: next }));
-    navigate?.({ kind, type, record: recordId, overdue: next === 'include' ? '1' : next });
+    navigate?.({ kind, type, record: recordId, overdue: next === 'include' ? '1' : next, due: dueDate, archive: route.archive });
   }
   function clearFilters() {
     setFilters(emptyFilters());
-    if (recordId || route.overdue) navigate?.({ kind, type });
+    if (recordId || route.overdue || dueDate) navigate?.({ kind, type, archive: route.archive });
   }
   function openCreate(event) {
     recordPreview.dismiss();
@@ -447,14 +452,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setMessage('');
     setError('');
   }
-  function openDetail(row, event, focusNote = false) {
-    recordPreview.dismiss();
-    clearDraftImages();
-    setFloatBox(null);
-    const trigger = event.currentTarget.matches('button') ? event.currentTarget : event.currentTarget.querySelector('.ledger-row-title');
-    trigger?.focus({ preventScroll: true });
-    setEditor({ mode: 'read', kind: row.kind, recordId: row.id, row, focusNote, animate: event.detail > 0 });
-  }
+
   function openEdit(row) {
     clearDraftImages();
     setTagDraft('');
@@ -476,10 +474,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     setTagDraft('');
   }
   function confirmDelete(row) {
-    setEditor(current => ({ ...current, mode: 'delete', requestId: requestId(), deleteBase: {
+    setEditor({ mode: 'delete', kind: row.kind, recordId: row.id, requestId: requestId(), deleteBase: {
       ...valuesOf(row), status: canonicalStatus(row.status),
       attachment_tokens: (row.attachments || []).map(image => image.file_token),
-    } }));
+    } });
     setError('');
   }
   async function deleteRecord() {
@@ -494,15 +492,16 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       });
       acceptSnapshot(result.snapshot);
       closeEditor();
-      if (recordId === editor.recordId) navigate?.({ kind, overdue: route.overdue });
+      closeInspection();
+      if (recordId === editor.recordId) navigate?.({ kind, type, due: dueDate, archive: route.archive, overdue: route.overdue });
     } catch (reason) {
       setError(reason.message);
     } finally {
       setSaving(false);
     }
   }
-  function addImages(files) {
-    if (saving || !data?.attachment_fields?.[editor?.kind]) return;
+  function addImages(files, row) {
+    if (saving || !data?.attachment_fields?.[row?.kind || editor?.kind]) return;
     if (files.some(file => !imageTypes.includes(file.type) || file.size < 1 || file.size > maxImageSize)) {
       setImageError('请选择 PNG、JPG、WebP 或 GIF 图片，每张最大 20 MB。');
       return;
@@ -511,7 +510,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       setImageError(`一次最多添加 ${maxImageCount} 张图片。`);
       return;
     }
-    if (editor.mode === 'read') openEdit(recordForEditor);
+    if (row) openEdit(row);
     setImageError('');
     const additions = files.map(file => {
       const src = URL.createObjectURL(file);
@@ -520,8 +519,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     });
     setDraftImages(current => [...current, ...additions]);
   }
-  function pasteImages(event) {
-    if (!canAttach) return;
+  function pasteImages(event, row) {
+    if (row ? !row.id.startsWith('rec') || !data?.attachment_fields?.[row.kind] : !canAttach) return;
     const items = Array.from(event.clipboardData?.items || []);
     const files = Array.from(event.clipboardData?.files || []);
     const pasted = files.length ? files : items
@@ -529,7 +528,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     const images = pasted.filter(file => file.type.startsWith('image/'));
     if (!images.length) return;
     event.preventDefault();
-    addImages(images);
+    addImages(images, row);
   }
   function removeDraftImage(id) {
     const image = draftImages.find(item => item.id === id);
@@ -727,17 +726,28 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
   const activeSort = manualOrder ? [] : sort.length ? sort : defaultLedgerSort;
   const primarySort = activeSort[0];
   const sorted = manualOrder ? orderedRows(rows, manualIds, sinkDone) : sortRecords(rows, activeSort, sinkDone);
-  const typedRows = type ? sorted.filter(row => categoryOf(row) === type) : sorted;
+  const typedRows = sorted.filter(row => (!type || categoryOf(row) === type) && (!dueDate || row.due === dueDate));
   const scopedRows = recordId ? typedRows.filter(row => row.id === recordId) : typedRows;
   const visible = filterRecords(scopedRows, filters, day);
   const selectionKey = row => (row.kind || kind) + ':' + row.id;
   const selectable = visible.filter(row => row.id.startsWith('rec'));
-  const aiRow = scopedRows.find(row => selectionKey(row) === aiSelection) || selectable[0];
-  function closeAssistant() { setAiOpen(false); aiTrigger.current?.focus(); }
-  function selectForAssistant(row, event) {
-    if (!aiOpen || !row.id.startsWith('rec')) { openDetail(row, event); return; }
+  const inspected = rows.find(row => selectionKey(row) === inspection?.key);
+  function closeInspection() {
+    const target = inspectionTrigger.current || document.querySelector('.ledger .is-inspected .ledger-row-title') || aiTrigger.current;
+    setInspection(null);
+    inspectionTrigger.current = null;
+    requestAnimationFrame(() => (target?.isConnected ? target : aiTrigger.current)?.focus({ preventScroll: true }));
+  }
+  function inspect(row, event, tab = 'detail', focusNote = false) {
+    if (!row) return;
     recordPreview.dismiss();
-    setAiSelection(selectionKey(row));
+    setImageError('');
+    setFloatBox(null);
+    if (event.currentTarget !== aiTrigger.current || inspection?.key !== selectionKey(row)) {
+      inspectionTrigger.current = event.currentTarget === aiTrigger.current ? null : event.currentTarget.matches('button')
+        ? event.currentTarget : event.currentTarget.querySelector('.ledger-row-title');
+    }
+    setInspection({ key: selectionKey(row), tab, focusNote });
   }
   const selectedRows = selectable.filter(row => selected.includes(selectionKey(row)));
   const selectionScope = selectable.map(selectionKey).join('|');
@@ -772,6 +782,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     ...Object.entries(filters.category || {}).map(([value, mode]) => ({ key: `category-${value}`, label: `${mode === 'exclude' ? '排除' : '只看'} ${value}`, clear: () => clearFacet('category', value) })),
     ...Object.entries(filters.priority).map(([value, mode]) => ({ key: `priority-${value}`, label: `${mode === 'exclude' ? '排除' : '只看'} ${value}`, clear: () => clearFacet('priority', value) })),
     ...Object.entries(filters.tags || {}).map(([value, mode]) => ({ key: `tag-${value}`, label: `${mode === 'exclude' ? '排除' : '含'} ${value}`, clear: () => clearFacet('tags', value) })),
+    ...(dueDate ? [{ key: 'due', label: '到期 ' + dueDate, clear: () => navigate?.({ kind, type, archive: route.archive, overdue: route.overdue }) }] : []),
     ...(filters.overdue ? [{ key: 'overdue', label: filters.overdue === 'exclude' ? '排除已过截止' : '只看已过截止', clear: () => changeOverdue(null) }] : []),
   ];
   const synced = data?.synced_at && new Date(data.synced_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
@@ -794,20 +805,20 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     tone = 'is-idle';
   }
   const editorLabel = editor?.kind === 'task' ? editor.form?.category || editor.row?.category || '任务' : '问题';
-  const reading = editor?.mode === 'read';
   const recordForEditor = (editor?.kind === 'task' ? tasks : issues).find(row => row.id === editor?.recordId) || editor?.row;
-  const canEditRecord = !!recordForEditor?.id.startsWith('rec');
   const hasAttachmentField = !!data?.attachment_fields?.[editor?.kind];
-  const canAttach = hasAttachmentField && (!reading || canEditRecord);
-  const drawerTitle = reading ? editorLabel + '详情' : editor?.mode === 'create' ? '新增记录' : '编辑' + editorLabel;
+  const canAttach = hasAttachmentField;
+  const drawerTitle = editor?.mode === 'create' ? '新增记录' : '编辑' + editorLabel;
   const createTypes = supportsCategory ? recordTypes : ['问题', '任务'];
   const filterTypes = supportsCategory || allTasks.some(row => row.category) ? recordTypes : ['问题', '任务'];
   const typeTabs = ['全部', ...filterTypes, ...(allTasks.some(row => !row.category) && filterTypes.includes('需求') ? ['未分类'] : [])];
   const activeType = type || (kind === 'task' ? '任务' : '全部');
-  const typeCount = value => value === '全部' ? issues.length + tasks.length : value === '任务' ? tasks.length : [...issues, ...tasks].filter(row => categoryOf(row) === value).length;
+  const dateRows = [...issues, ...tasks].filter(row => !dueDate || row.due === dueDate);
+  const typeCount = value => value === '全部' ? dateRows.length
+    : dateRows.filter(row => value === '任务' ? row.kind === 'task' : categoryOf(row) === value).length;
   const createType = editor?.kind === 'issue' ? '问题' : editor?.form?.category || '任务';
   const imageSection = (hasAttachmentField || recordForEditor?.attachments?.length) ? <RecordImages
-    row={recordForEditor} drafts={draftImages} disabled={saving} onFiles={canAttach ? addImages : undefined}
+    row={recordForEditor} drafts={draftImages} disabled={saving} onFiles={canAttach ? files => addImages(files) : undefined}
     onRemove={removeDraftImage} error={imageError} /> : null;
   function contextButton(row) {
     return <button type="button" className="ledger-context-trigger" title="查看执行资料" aria-label={'执行资料 · ' + row.content} onClick={event => { event.stopPropagation(); setContextRow(row); }}><ClipboardList size={15}/></button>;
@@ -827,12 +838,11 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     const fullText = row[field] || '';
     const text = note ? fullText : (wrap && fullText.trim()) || recordTitle(row);
     const preview = wrap ? {} : recordPreview.bind(fullText, note ? '备注' : '内容', !note && text === fullText.trim());
-    return <button type="button" className={note ? 'ledger-note-text' : 'ledger-row-title'} aria-haspopup={note || !aiOpen ? 'dialog' : undefined}
+    return <button type="button" className={note ? 'ledger-note-text' : 'ledger-row-title'} aria-haspopup="dialog"
       {...preview}
       onClick={event => {
         event.stopPropagation();
-        if (note) openDetail(row, event, true);
-        else selectForAssistant(row, event);
+        inspect(row, event, 'detail', note);
       }}>{text}</button>;
   }
   function renderCell(key, row) {
@@ -891,8 +901,9 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       </div>
       <div className="ledger-actions">
         {data?.base_url && <a href={data.base_url} target="_blank" rel="noreferrer">打开飞书表格</a>}
-        <button ref={aiTrigger} type="button" className="ledger-ai-trigger" aria-expanded={aiOpen} aria-controls={aiOpen ? 'task-assistant' : undefined} disabled={!data}
-          onClick={() => { if (aiOpen) closeAssistant(); else { setAiSelection(aiRow ? selectionKey(aiRow) : ''); setAiOpen(true); } }}>
+        <button ref={aiTrigger} type="button" className="ledger-ai-trigger" aria-expanded={!!inspected && inspection.tab === 'ai'} aria-controls={inspected ? 'ledger-inspector' : undefined} disabled={!inspected && !selectable.length}
+          onClick={event => inspected && inspection.tab === 'ai'
+            ? closeInspection() : inspect(inspected || selectable[0], event, 'ai')}>
           <Sparkles size={15}/>AI 建议
         </button>
         <button type="button" className="ledger-primary" disabled={!data} onClick={openCreate}><Plus size={15}/>新增</button>
@@ -939,7 +950,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
           </div>
         </LedgerMenu>
         {chips.slice(0,2).map(chip => <button key={chip.key} type="button" className="ledger-active-filter" title={chip.label} onClick={chip.clear}><span>{chip.label}</span><X size={12}/></button>)}
-        {recordId && <button type="button" className="ledger-active-filter" onClick={() => navigate?.({ kind, type, overdue: route.overdue })}>定位记录<X size={12}/></button>}
+        {recordId && <button type="button" className="ledger-active-filter" onClick={() => navigate?.({ kind, type, overdue: route.overdue, due: dueDate, archive: route.archive })}>定位记录<X size={12}/></button>}
       </div>
       <div className="ledger-toolbar-group ledger-toolbar-actions">
         <span className="ledger-result-count" aria-live="polite">{data ? <><strong>{visible.length}</strong>{visible.length !== typedRows.length ? ` / ${typedRows.length}` : ""} 条记录</> : '读取中…'}</span>
@@ -980,10 +991,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       {selectedRows.every(row => data?.archive_supported?.[row.kind || kind]) && <button type="button" disabled={saving} onClick={() => submitPatches(selectedRows, { archived: archiveMode !== 'archived' })}>{archiveMode === 'archived' ? <ArchiveRestore size={15}/> : <Archive size={15}/>}{archiveMode === 'archived' ? '恢复' : '归档'}</button>}
       <button type="button" onClick={() => setSelected([])} aria-label="取消批量选择"><X size={15}/></button>
     </div>}
-    <div className={aiOpen ? 'ledger-workspace has-assistant' : 'ledger-workspace'}>
+    <div className={inspected ? 'ledger-workspace has-inspector' : 'ledger-workspace'}>
     {view === 'board' ? <div className="ledger-board">{statuses.map(status => <section key={status} className="ledger-column" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); const row = visible.find(item => item.id === id); if (row) moveStatus(row, status); }}>
       <header><strong>{status}</strong><em>{visible.filter(row => row.status === status).length}</em></header>
-      {visible.filter(row => row.status === status).map(row => <article key={row.id} className={aiOpen && row === aiRow ? 'is-ai-current' : undefined} draggable={!saving} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }} onClick={event => selectForAssistant(row, event)}>
+      {visible.filter(row => row.status === status).map(row => <article key={row.id} className={row === inspected ? 'is-inspected' : undefined} draggable={!saving} onDragStart={event => { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move'; }} onClick={event => inspect(row, event)}>
         <h3>{recordButton(row)}</h3>{kind === 'all' && <small className="ledger-row-kind">{row.kind === 'task' ? '任务' : '问题'}</small>}
         {supportsTags(row.kind) && <div className="ledger-card-tags" onClick={event => event.stopPropagation()}>{(row.tags || []).map(tag => <button key={tag} type="button" className={`ledger-pill is-tag ${(filters.tags || {})[tag] ? `is-${(filters.tags || {})[tag]}` : ''}`} onClick={() => setFacet('tags', tag)}>{tag}</button>)}{taggingId === row.id ? <input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入标签" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitRowTag(row); } if (event.key === 'Escape') { tagCommit.current = true; setTaggingId(null); } }} onBlur={() => commitRowTag(row)} /> : <button type="button" className="ledger-add-tag" onClick={event => beginRowTag(event, row)}>+ 标签</button>}</div>}
         <footer>{showCategoryColumn && <Pill tone={row.category === '优化' ? 'is-category-opt' : 'is-category-need'}>{categoryOf(row)}</Pill>}<Pill tone={priorityTone[row.priority]}>{row.priority}</Pill><span className={isOverdue(row, day) ? 'ledger-past' : ''}>{row.due || '无截止'}</span>{contextButton(row)}</footer>
@@ -1016,8 +1027,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
             {key === columns.at(-1) ? <span className="ledger-auto-width" title="末列自动填充剩余空间">自动</span> : <ColumnResize label={columnLabels[key]} value={fittedWidths[key]} minimum={ledgerColumnLimits[key][0]} maximum={ledgerColumnLimits[key][1]} fallback={ledgerColumnDefaults[key]} onChange={value => resizeColumn(key, value)} />}
           </th>)}
         </tr></thead>
-        <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={event => selectForAssistant(row, event)}
-          className={[row.archived ? 'is-archived' : '', selected.includes(selectionKey(row)) ? 'is-selected' : '', aiOpen && row === aiRow ? 'is-ai-current' : '', rowTarget?.key === row.id ? (rowTarget.after ? 'drop-after' : 'drop-before') : ''].filter(Boolean).join(' ')}
+        <tbody>{visible.map((row, index) => <tr key={`${row.kind}-${row.id}`} onClick={event => inspect(row, event)}
+          className={[row.archived ? 'is-archived' : '', selected.includes(selectionKey(row)) ? 'is-selected' : '', row === inspected ? 'is-inspected' : '', rowTarget?.key === row.id ? (rowTarget.after ? 'drop-after' : 'drop-before') : ''].filter(Boolean).join(' ')}
           onDragOver={event => {
             const target = rowDrop(event, row);
             if (target && (rowTarget?.key !== row.id || rowTarget.after !== target.after)) setRowTarget(target);
@@ -1041,8 +1052,44 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       </table>
       {!visible.length && <div className="ledger-empty">{data ? '当前筛选下没有记录。' : '正在读取飞书表格…'}</div>}
     </div>}
-    {aiOpen && <TaskAssistant row={aiRow} available={suggestionsAvailable} busy={saving} onClose={closeAssistant}
-      onDetails={event => openDetail(aiRow, event)} onQueue={queueSuggestion} onReadback={load}/>}
+    {inspected && <RecordInspector recordKey={inspection.key} title={recordTitle(inspected)} subtitle={[
+      categoryOf(inspected), inspected.archived ? '已归档' : '', inspected.priority,
+      inspected.due ? '截止 ' + inspected.due : '',
+    ].filter(Boolean).join(' · ')} onClose={closeInspection}
+      onPaste={event => { if (inspection.tab === 'detail') pasteImages(event, inspected); }}
+      noteFocus={inspection.tab === 'detail' && inspection.focusNote ? noteHeading : undefined}
+      tabs={<div className="ledger-inspector-tabs" role="group" aria-label="记录侧栏">
+        {[['detail', '详情'], ['ai', 'AI 建议']].map(([tab, label]) => <button type="button" key={tab}
+          aria-pressed={inspection.tab === tab} onClick={() => setInspection(current => ({ ...current, tab, focusNote: false }))}>
+          {label}
+        </button>)}
+      </div>}>
+      <div hidden={inspection.tab !== 'detail'} className="ledger-inspector-view">
+        <div className="ledger-inspector-content ledger-record-detail" key={inspection.key}>
+          <section><h3>内容</h3><RecordText text={inspected.content}/></section>
+          <section><h3>状态与标签</h3><div className="ledger-inspector-status">
+            <Pill tone={statusTone[inspected.status]}>{inspected.status}</Pill>
+            {(inspected.tags || []).map(tag => <Pill key={tag} tone="is-tag">{tag}</Pill>)}
+          </div></section>
+          {inspected.note && <section><h3 ref={noteHeading} tabIndex={-1}>备注</h3><RecordText text={inspected.note}/></section>}
+          {(data?.attachment_fields?.[inspected.kind] || inspected.attachments?.length) ? <RecordImages
+            row={inspected} disabled={saving} error={imageError}
+            onFiles={inspected.id.startsWith('rec') && data?.attachment_fields?.[inspected.kind]
+              ? files => addImages(files, inspected) : undefined}/> : null}
+        </div>
+        <footer className="ledger-inspector-footer">
+          {inspected.id.startsWith('rec') ? <>
+            <button type="button" className="ledger-delete-button" disabled={saving || !!inspected.sync_state}
+              onClick={() => confirmDelete(inspected)}><Trash2 size={15}/>删除记录</button>
+            <button type="button" className="ledger-primary" onClick={() => openEdit(inspected)}>编辑</button>
+          </> : <span className="ledger-caption">正在同步，完成后可编辑。</span>}
+        </footer>
+      </div>
+      <div hidden={inspection.tab !== 'ai'} className="ledger-inspector-view">
+        <TaskAssistant key={inspection.key} row={inspected} available={suggestionsAvailable}
+          busy={saving} onQueue={queueSuggestion} onReadback={load}/>
+      </div>
+    </RecordInspector>}
     </div>
     {floatBox && <div className="ledger-float" style={floatBox.position} role="dialog" aria-label={floatBox.title}><header><strong>{floatBox.title}</strong><button type="button" aria-label="关闭浮层" onClick={() => setFloatBox(null)}><X size={14}/></button></header><p>{floatBox.text}</p>{floatBox.rowId && <>{!!reusableTags.length && <div className="ledger-float-tags" role="group" aria-label="已有标签">{reusableTags.map(tag => { const selected = hasTag(floatTags, tag); return <button key={tag} type="button" className={`ledger-chip${selected ? ' is-selected' : ''}`} aria-pressed={selected ? 'true' : 'false'} onClick={() => reuseRowTag(tag)}>{tag}</button>; })}</div>}<input className="ledger-tag-input" aria-label="新标签" autoFocus value={rowTag} maxLength={16} placeholder="输入新标签后回车" onChange={event => setRowTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (floatRow) commitRowTag(floatRow); setFloatBox(null); } if (event.key === 'Escape') setFloatBox(null); }} /></>}</div>}
     {contextRow && <TaskContext key={contextRow.kind + contextRow.id} row={contextRow} projects={projects} onClose={() => setContextRow(null)}/>}
@@ -1056,34 +1103,16 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       <footer className="ledger-drawer-footer">
         <button type="button" className="ledger-dialog-archive" disabled={saving} onClick={() => {
           setError('');
-          setEditor(current => ({ ...current, mode: 'read', focusNote: false }));
+          closeEditor();
         }}>取消</button>
         <button type="button" className="ledger-delete-button" disabled={saving} onClick={deleteRecord}>
           {saving ? '正在提交…' : '确认删除'}
         </button>
       </footer>
     </RecordDrawer>}
-    {editor && editor.mode !== 'delete' && <RecordDrawer key="record" title={drawerTitle} onClose={closeEditor} busy={saving} onPaste={pasteImages}
-      reading={reading} initialFocus={reading && editor.focusNote ? noteHeading : undefined} animate={editor.animate}
-      subtitle={reading && recordForEditor ? [
-        canonicalStatus(recordForEditor.status), recordForEditor.priority, recordForEditor.category,
-        recordForEditor.due ? `截止 ${recordForEditor.due}` : '',
-      ].filter(Boolean).join(' · ') : undefined}>
-      {reading ? <>
-        <div className="ledger-drawer-body ledger-record-detail">
-          <section><h3>内容</h3><RecordText text={recordForEditor?.content}/></section>
-          {recordForEditor?.note && <section><h3 ref={noteHeading} tabIndex={-1}>备注</h3><RecordText text={recordForEditor.note}/></section>}
-          {imageSection}
-        </div>
-        <footer className="ledger-drawer-footer">
-          {canEditRecord && <button type="button" className="ledger-delete-button" disabled={saving || !!recordForEditor.sync_state}
-            title={recordForEditor.sync_state ? '记录有待同步的修改' : undefined} onClick={() => confirmDelete(recordForEditor)}>
-            <Trash2 size={15} aria-hidden="true"/>删除记录
-          </button>}
-          {canEditRecord ? <button type="button" className="ledger-primary" onClick={() => openEdit(recordForEditor)}>编辑</button>
-            : <span className="ledger-caption">正在同步，完成后可编辑。</span>}
-        </footer>
-      </> : <form className="ledger-drawer-form" onSubmit={save}>
+    {editor && editor.mode !== 'delete' && <RecordDrawer key="record" title={drawerTitle} onClose={closeEditor}
+      busy={saving} onPaste={pasteImages} animate={editor.animate}>
+      <form className="ledger-drawer-form" onSubmit={save}>
       <div className="ledger-drawer-body">
       {error && <div className="ledger-alert" role="alert">{error}</div>}
       {editor.conflict && <div className="ledger-conflict" role="status"><strong>飞书已更新</strong><p>当前状态：{canonicalStatus(editor.conflict.status)}；当前备注：{editor.conflict.note || '空'}。</p><p>下方保留你本次修改的字段，其他字段采用飞书最新值。请核对后保存。</p></div>}
@@ -1118,7 +1147,7 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         {editor.mode === 'edit' && data?.archive_supported?.[editor.kind] && <button type="button" className="ledger-dialog-archive" disabled={saving} onClick={event => save(event, !editor.base.archived)}>{editor.base.archived ? '恢复此记录' : '归档此记录'}</button>}
         <button type="submit" className="ledger-primary" disabled={saving || (editor.uncertain && !editor.confirmed)}><Save size={15}/>{saving ? '正在保存…' : '保存'}</button>
       </footer>
-    </form>}
+    </form>
     </RecordDrawer>}
   </section>;
 }

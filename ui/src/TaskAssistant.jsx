@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, ChevronRight, FileText, PanelRightClose, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, ChevronRight, FileText, Sparkles } from 'lucide-react';
 import { priorities, statuses } from './ledger-model.js';
 import './task-assistant.css';
 
@@ -7,23 +7,7 @@ const labels = { status: '状态', priority: '优先级' };
 const allowed = { status: statuses, priority: priorities };
 const sourceOf = row => ({ status: row.status, priority: row.priority || null, content: row.content });
 
-export default function TaskAssistant({ row, available, busy, onClose, onDetails, onQueue, onReadback }) {
-  const heading = useRef(null);
-  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
-  return <aside className="task-assistant" id="task-assistant" aria-labelledby="task-assistant-title" onKeyDown={event => {
-    if (event.key === 'Escape' && !event.target.closest('dialog')) { event.preventDefault(); onClose(); }
-  }}>
-    <header className="task-assistant-head">
-      <span className="hub-setting-icon"><Sparkles size={18}/></span>
-      <div><h2 id="task-assistant-title" ref={heading} tabIndex={-1}>AI 任务建议</h2><small>Codex · 当前记录</small></div>
-      <button type="button" className="icon-button" aria-label="收起 AI 建议" title="收起 AI 建议" onClick={onClose}><PanelRightClose size={17}/></button>
-    </header>
-    {row ? <TaskProposal key={row.kind + row.id} {...{ row, available, busy, onDetails, onQueue, onReadback }}/>
-      : <p className="task-assistant-empty">选中一条问题或任务，查看可建议的字段。</p>}
-  </aside>;
-}
-
-function TaskProposal({ row, available, busy, onDetails, onQueue, onReadback }) {
+export default function TaskAssistant({ row, available, busy, onQueue, onReadback }) {
   const [evidence, setEvidence] = useState('');
   const [draft, setDraft] = useState(null);
   const [checked, setChecked] = useState([]);
@@ -135,11 +119,6 @@ function TaskProposal({ row, available, busy, onDetails, onQueue, onReadback }) 
 
   return <>
     <div className="task-assistant-body">
-      <div className="task-assistant-record">
-        <div><span>{row.kind === 'task' ? '飞书任务' : '飞书问题'}</span><strong>{title}</strong></div>
-        <button type="button" className="icon-button" aria-label="查看当前记录详情" title="查看记录详情" onClick={onDetails}><FileText size={17}/></button>
-        <small>{[current.status, current.priority].filter(Boolean).join(' · ')}</small>
-      </div>
       <ol className="task-assistant-steps" aria-label="建议进度">
         {['拟定', '复核', '应用并读回'].map((label, index) =>
           <li key={label} aria-current={index === stage ? 'step' : undefined} className={index < stage || submitted ? 'is-done' : ''}>
@@ -158,7 +137,7 @@ function TaskProposal({ row, available, busy, onDetails, onQueue, onReadback }) 
             <div><strong>{labels[key]}</strong><ChangeValue from={draft.base[key]} to={draft.changes[key].value}/><p>{draft.changes[key].reason}</p></div>
           </label>
         )}</div> : <p className="task-assistant-note">根据你提供的依据，当前字段可保留。</p>}
-        <details className="task-assistant-evidence"><summary>查看生成依据</summary><p>{draft.evidence}</p></details>
+        <div className="task-assistant-evidence"><h3>生成依据</h3><p>{draft.evidence}</p></div>
       </> : <form id="task-assistant-form" className="task-assistant-form" onSubmit={generate}>
         {stale && <p className="task-assistant-note" role="status">记录已更新，请用最新内容重新生成。</p>}
         {!available && <p className="task-assistant-note" role="status">未检测到本机 Codex 或建议服务，请检查安装并重启 AI Hub。</p>}
@@ -182,7 +161,7 @@ function TaskProposal({ row, available, busy, onDetails, onQueue, onReadback }) 
           <Sparkles size={16}/>{generating ? 'Codex 正在拟定…' : '生成建议'}
         </button>}
     </footer>
-    <dialog ref={dialog} className="task-assistant-dialog" aria-labelledby="task-assistant-review" onCancel={event => { if (queueing) event.preventDefault(); else setError(''); }}>
+    <dialog ref={dialog} className="task-assistant-dialog" aria-labelledby="task-assistant-review" onCancel={event => { event.stopPropagation(); if (queueing) event.preventDefault(); else setError(''); }}>
       <form onSubmit={event => { event.preventDefault(); apply(); }}>
         <header><h2 id="task-assistant-review">复核 AI 建议</h2><p>{title}</p></header>
         <div className="task-assistant-review-fields">
