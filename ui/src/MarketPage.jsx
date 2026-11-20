@@ -1,8 +1,9 @@
 import React, {useEffect,useRef,useState} from 'react';
-import {ArrowDownToLine,ArrowUpRight,Check,ChevronDown,Download,Expand,FileUp,GripVertical,RefreshCw,Save,Star,X,Database} from 'lucide-react';
+import {ArrowDownToLine,ArrowUpRight,Check,ChevronDown,Download,Expand,FileUp,GripVertical,RefreshCw,Save,SlidersHorizontal,Star,X,Database} from 'lucide-react';
 import {applyOrder,moveItem} from './market-order.js';
 import {shiftDate, storeAlerts} from './market-board.js';
 import MarketDashboard from './MarketDashboard.jsx';
+import {ChannelSettings,HuaweiAuthorization} from './MarketChannelSettings.jsx';
 import './market.css';
 const today=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
 const counts={downloads:'商店下载量',new_users:'新增用户',active_users:'日活跃用户',uploaded_records:'业务上传记录数',uploaded_bytes:'业务上传字节数',upload_failures:'业务上传失败次数',cohort_users:'留存批次新增人数',retained_d1:'该批次次日留存人数',retained_d7:'该批次 7 日留存人数'};
@@ -23,6 +24,7 @@ const partLabels = { channels:'版本审核', audit:'驳回详情', downloads:'�
 const partStates = {
  unsupported:'未接入',
  needs_login:'需登录',
+ needs_configuration:'待授权',
  access_denied:'权限不足',
  app_not_found:'未找到应用',
  read_failed:'读取失败',
@@ -43,6 +45,7 @@ function batchResult(state) {
  if (state === 'running') return ['running','采集中'];
  if (state === 'ready') return ['ready','成功'];
  if (state === 'partial') return ['partial','部分同步'];
+ if (state === 'needs_configuration') return ['login','待授权'];
  if (state === 'needs_login' || state === 'auth_restore_failed') return ['login','需登录'];
  return ['failed','失败'];
 }
@@ -77,7 +80,7 @@ function MarketBatch({batch, stores, orderedIds, providers, open, setOpen, onCha
            : tone !== 'running' && <small>{issues.length
              ? issues.map(([key, part]) => `${partLabel(key, id)} ${partStatus(part)}`).join(' · ')
              : result.reason}</small>}
-         {tone === 'login' && <button type="button" onClick={() => onChannel(id)}>前往登录</button>}
+         {tone === 'login' && <button type="button" onClick={() => onChannel(id)}>{id === 'huawei'?'前往授权':'前往登录'}</button>}
          {(tone === 'failed' || tone === 'partial') && <button type="button" disabled={providers[id]?.state === 'running'} onClick={() => onRetry(id)}>重试{stores[id]}</button>}
        </li>;
      })}
@@ -124,8 +127,10 @@ export default function MarketPage({standalone=false, route, navigate}){
  }
  const [data,setData]=useState(null),[error,setError]=useState(''),[refreshing,setRefreshing]=useState(false),[kind,setKind]=useState('metrics'),[modal,setModal]=useState(null),[form,setForm]=useState({}),[base,setBase]=useState(null),[saving,setSaving]=useState(false),[csv,setCsv]=useState(''),[preview,setPreview]=useState(null),[message,setMessage]=useState('');
  const [screen,setScreen]=useState(()=>new URLSearchParams(location.search).get('display')==='1');
- const [storeOrder,setStoreOrder]=useState(()=>{try{return JSON.parse(localStorage.getItem('ai-hub-market-order'))||[];}catch{return [];}});
+ const [legacyOrder]=useState(()=>{try{return JSON.parse(localStorage.getItem('ai-hub-market-order'))||[];}catch{return [];}});
  const [dropStore,setDropStore]=useState(null);
+ const [editingChannels,setEditingChannels]=useState(null);
+ const preferenceWrite=useRef(false);
  const [startingAll, setStartingAll] = useState(false);
  const [batchOpen, setBatchOpen] = useState(false);
  const mounted=useRef(true),fileInput=useRef();
@@ -145,7 +150,8 @@ export default function MarketPage({standalone=false, route, navigate}){
      if (!mounted.current) return;
      if (sequence > reads.applied) {
        reads.applied = sequence;
-       setData(snapshot);
+       setData(current => current?.channel_preferences?.revision > snapshot.channel_preferences?.revision
+         ? {...snapshot,channel_preferences:current.channel_preferences} : snapshot);
        setError('');
      }
      if (report) {
@@ -181,12 +187,54 @@ export default function MarketPage({standalone=false, route, navigate}){
  }, []);
  useEffect(()=>{function key(e){if(e.key==='Escape'){if(!saving)setModal(null);if(!document.fullscreenElement)setScreen(false);}}addEventListener('keydown',key);return()=>removeEventListener('keydown',key);},[saving]);
  const stores=data?.channels_map||{},statuses=data?.statuses||{};
- const orderedIds=applyOrder(Object.keys(stores),storeOrder);
+ const prefs = data?.channel_preferences;
+ const allIds = applyOrder(Object.keys(stores), prefs?.revision ? prefs.order : legacyOrder);
+ const hiddenIds = prefs?.hidden || [];
+ const orderedIds = allIds.filter(id => !hiddenIds.includes(id));
  const channel = orderedIds.includes(view.channel) ? view.channel : 'all';
  const shownIds = channel === 'all' ? orderedIds : [channel];
  const selectedDetailIds = (view.series || '').split(',').filter(id => orderedIds.includes(id));
  const detailIds = tab === 'metrics' && selectedDetailIds.length ? selectedDetailIds : shownIds;
- function moveStore(from,to){const next=moveItem(orderedIds,from,to);setStoreOrder(next);try{localStorage.setItem('ai-hub-market-order',JSON.stringify(next));}catch{/* 顺序只留在这台机器 */}}
+ function openChannelSettings() {
+   setEditingChannels({order:allIds,hidden:hiddenIds,revision:prefs.revision});
+   setError('');
+   setModal('channel-settings');
+ }
+ async function saveChannelSettings(next, revision, close = false) {
+   if (preferenceWrite.current || !prefs || data.read_only) return;
+   preferenceWrite.current = true;
+   if (close) setSaving(true);
+   setError('');
+   try {
+     const result = await api('channel-preferences', {...next,revision});
+     setData(current => ({...current,channel_preferences:result.channel_preferences}));
+     if (close) setModal(null);
+   } catch (error) {
+     await refresh();
+     setError(error.message);
+   } finally {
+     preferenceWrite.current = false;
+     if (close) setSaving(false);
+   }
+ }
+ function moveStore(from,to) {
+   const order = moveItem(allIds,from,to);
+   if (order !== allIds) saveChannelSettings({order,hidden:hiddenIds},prefs?.revision);
+ }
+ async function authorizeHuawei(fields) {
+   setSaving(true);
+   setError('');
+   try {
+     await api('huawei-auth', fields);
+     setModal(null);
+     await refresh();
+     setMessage('华为授权已核验，正在读取 ISHO 渠道数据。');
+   } catch (error) {
+     setError(error.message);
+   } finally {
+     setSaving(false);
+   }
+ }
  function dragStart(event,id){event.dataTransfer.setData('text/plain',id);event.dataTransfer.effectAllowed='move';}
  function dragOver(event,id){event.preventDefault();setDropStore(id);}
  function dragLeave(event,id){if(!event.currentTarget.contains(event.relatedTarget))setDropStore(current=>current===id?null:current);}
@@ -237,7 +285,7 @@ export default function MarketPage({standalone=false, route, navigate}){
    setMessage('');
    setError('');
    try {
-     await api('collect', {operation:'sync_all'});
+     await api('collect', {operation:'sync_all',providers:orderedIds});
      setBatchOpen(true);
      await refresh();
    } catch (error) {
@@ -254,34 +302,38 @@ export default function MarketPage({standalone=false, route, navigate}){
   <header className="market-head">
    <div><h1>应用运营<span>.</span></h1><p>com.jryx.isho <span>·</span> 版本、增长与业务数据，在同一个视野里。</p></div>
    <div className="market-actions">
+    {prefs && !readonly && !screen && <button type="button" onClick={openChannelSettings}><SlidersHorizontal size={15}/>管理渠道</button>}
     <button onClick={()=>{setModal('guide');setError('');}}>数据接入说明</button>
     <button type="button" onClick={refreshRecords} disabled={refreshing} aria-busy={refreshing} title="重新读取已保存的运营记录">
      <RefreshCw size={15}/>{refreshing ? '刷新中…' : refreshLabel}
     </button>
     <button onClick={toggleScreen}><Expand size={15}/>{screen?'退出大屏':'大屏模式'}</button>
     {!screen&&!readonly&&<button className={canCollect ? '' : 'market-primary'} onClick={beginImport}><FileUp size={15}/>导入报表</button>}
-    {canCollect && <button type="button" className="market-primary" onClick={syncAll} disabled={startingAll || batchRunning} aria-busy={startingAll || batchRunning}>
-      <RefreshCw size={15}/>{batchRunning ? `同步中 ${batchFinished}/${Object.keys(batch.results).length}` : startingAll ? '正在启动…' : '同步全部渠道'}
+    {canCollect && <button type="button" className="market-primary" onClick={syncAll} disabled={startingAll || batchRunning || !orderedIds.length} aria-busy={startingAll || batchRunning}>
+      <RefreshCw size={15}/>{batchRunning ? `同步中 ${batchFinished}/${Object.keys(batch.results).length}` : startingAll ? '正在启动…' : hiddenIds.length ? '同步可见渠道' : '同步全部渠道'}
     </button>}
    </div>
   </header>
   {error&&<div className="market-alert" role="alert">{error}</div>}{message&&<div className="market-success" role="status"><Check size={15}/>{message}</div>}
-  {canCollect && batch && <MarketBatch batch={batch} stores={stores} orderedIds={orderedIds} providers={providers} open={batchOpen} setOpen={setBatchOpen}
+  {canCollect && batch && <MarketBatch batch={batch} stores={stores} orderedIds={allIds.filter(id=>batch.results[id] && (!hiddenIds.includes(id) || batchRunning))} providers={providers} open={batchOpen} setOpen={setBatchOpen}
     onChannel={showStoreConnection} onRetry={id => {showStoreConnection(id);collect('sync',id);}}/>}
   {!!problems.length && <div className="market-alert market-alert-links" role="status"><span>渠道需要处理</span>{problems.map(id => <button className="button" type="button" key={id} onClick={() => go({ tab: 'channels', channel: id, alert: '1', date: '' })}>{stores[id]} · {storeAlerts[providers[id].state]}<ArrowUpRight size={13}/></button>)}</div>}
   {data?<><div className="market-source"><span><Database size={14}/>{data.connection.label}{readonly?' · 只读':''}</span><span>读取于 {time(data.generated_at)} · 页面可见时每分钟重读</span></div>
-  <div className="market-filters"><div className="market-tabs">{marketTabs.map(([id,label])=><button key={id} className={tab===id?'selected':''} onClick={()=>go({ tab: id, date: '', alert: '' })}>{label}</button>)}</div><div><select aria-label="渠道筛选" value={channel} onChange={e=>go({ channel: e.target.value, series: '', alert: '' })}><option value="all">全部商店</option>{orderedIds.map(id=><option key={id} value={id}>{stores[id]}</option>)}</select><select aria-label="日期范围" value={days} onChange={e=>go({ days: e.target.value, date: '', ...(e.target.value === 'custom' ? {from: shiftDate(today(),-29),to: today()} : {from:'',to:''}) })}>{[['7','近 7 天'],['30','近 30 天'],['90','近 90 天'],['all','全部历史'],['custom','自定义日期']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div></div>
+  <div className="market-filters"><div className="market-tabs">{marketTabs.map(([id,label])=><button key={id} className={tab===id?'selected':''} onClick={()=>go({ tab: id, date: '', alert: '' })}>{label}</button>)}</div><div><select aria-label="渠道筛选" value={channel} onChange={e=>go({ channel: e.target.value, series: '', alert: '' })}><option value="all">{hiddenIds.length ? "可见商店" : "全部商店"}</option>{orderedIds.map(id=><option key={id} value={id}>{stores[id]}</option>)}</select><select aria-label="日期范围" value={days} onChange={e=>go({ days: e.target.value, date: '', ...(e.target.value === 'custom' ? {from: shiftDate(today(),-29),to: today()} : {from:'',to:''}) })}>{[['7','近 7 天'],['30','近 30 天'],['90','近 90 天'],['all','全部历史'],['custom','自定义日期']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div></div>
   {days === 'custom' && <div className="market-custom-range"><label>开始日期<input type="date" aria-label="运营开始日期" value={view.from || ''} max={end} onChange={e=>go({from:e.target.value,date:''})}/></label><span>至</span><label>结束日期<input type="date" aria-label="运营结束日期" value={view.to || ''} min={view.from || ''} max={today()} onChange={e=>go({to:e.target.value,date:''})}/></label>{since > end && <span role="alert">开始日期不能晚于结束日期</span>}</div>}
-  {tab==='board'&&<><MarketDashboard points={points} stores={stores} orderedIds={shownIds} start={days === 'all' ? points[0]?.date || end : since} end={end}
+  {!orderedIds.length && tab !== 'history' && <div className="market-no-channels" role="status">
+    当前没有可见渠道。{prefs && !readonly && !screen && <button onClick={openChannelSettings}>管理渠道</button>}
+  </div>}
+  {tab==='board'&&orderedIds.length>0&&<><MarketDashboard points={points} stores={stores} orderedIds={shownIds} start={days === 'all' ? points[0]?.date || end : since} end={end}
     onRange={(from,to,ids) => go({ tab: 'metrics', days: 'custom', from, to, date: from === to ? from : '', channel: ids.length === 1 ? ids[0] : 'all', series: ids.join(','), alert: '' })}/><ReviewStrip reviews={reviews} orderedIds={shownIds} stores={stores}/></>}
-  {tab==='channels'&&<><div className="market-panel"><div className="market-section-title"><h2>渠道上架进度</h2><span>线上版本与当前提审流程分开核对</span></div><div className="market-channel-grid">{[...data.channels].filter(c=>channel==='all'||c.channel===channel).sort((a,b)=>orderedIds.indexOf(a.channel)-orderedIds.indexOf(b.channel)).map(c=><article key={c.channel} className={'market-channel'+(dropStore===c.channel?' is-drop':'')} onDragOver={e=>dragOver(e,c.channel)} onDragLeave={e=>dragLeave(e,c.channel)} onDrop={e=>dropOn(e,c.channel)}><header><button type="button" className="market-drag" draggable aria-label={'拖动调整'+stores[c.channel]+'的顺序'} onDragStart={e=>dragStart(e,c.channel)}><GripVertical size={16}/></button><div className={'market-brand '+c.channel}>{stores[c.channel].slice(0,1)}</div><h3>{stores[c.channel]}</h3><span className={'market-status '+c.status}>{c.status==='reviewing'&&c.reason==='人工审核中'?c.reason:statuses[c.status]}</span></header><dl><div><dt>线上版本</dt><dd>{c.live_version||'待核实'}{c.live_code!=null&&<small> ({c.live_code})</small>}</dd></div><div><dt>更新版本</dt><dd>{c.pending_version||'未记录'}{c.pending_code!=null&&<small> ({c.pending_code})</small>}</dd></div><div><dt>提交 / 上架</dt><dd>{c.submitted_at||'—'} / {c.released_at||'—'}</dd></div><div><dt>商店评分</dt><dd>{c.rating==null?'待核实':`${c.rating} / 5`}{c.rating_count!=null&&<small> · {number(c.rating_count)} 次评分</small>}</dd></div></dl><ChannelAudit row={c} audit={providers[c.channel]?.parts?.audit} store={stores[c.channel]}/><p className="market-caption">核对日期：{c.as_of||'尚未提供'}<br/>保存时间：{time(c.updated_at)}</p><footer>{!readonly&&!screen&&<button onClick={()=>edit('channels',c)}>更新进度</button>}{c.url&&<a target="_blank" rel="noreferrer" href={c.url}>商店页面<ArrowUpRight size={13}/></a>}</footer></article>)}</div></div>
-  <section className="market-platform-connections" aria-label="商店连接" ref={connections}><div className="market-section-title"><h2>商店连接</h2><span>拖动左侧手柄调整顺序 · 登录会话各自隔离</span></div><div className="market-provider-grid">{(alertFocus && channel === 'all' && problems.length ? problems : shownIds).map(id=>{const name=stores[id];const c=providers[id]||{state:'needs_login'};const busy=c.state==='running';const connected=!!(c.last_success||c.last_partial_success);const statusText=(({ready:'同步成功',partial:'部分同步',running:'处理中',needs_login:connected?'需要重新登录':'待登录核实',needs_adapter:'待接通数据',profile_busy:'专用窗口使用中',browser_missing:'采集浏览器缺失',read_failed:'读取失败',app_not_found:'未找到 ISHO',access_denied:'权限不足',developer_unverified:'需企业／团队权限',auth_restore_failed:'会话需重新登录',auth_key_unavailable:'钥匙串不可用',interrupted:'上次任务中断',manual:'尚未启用'})[c.state]||'待核实');const reasonText=c.reason||'请先在官方页面完成登录，再核对 ISHO 的数据权限。';return <article key={id} tabIndex={-1} className={'market-provider '+(alertFocus?'is-target ':'')+(c.state==='ready'?'is-ready':'')+(dropStore===id?' is-drop':'')} onDragOver={e=>dragOver(e,id)} onDragLeave={e=>dragLeave(e,id)} onDrop={e=>dropOn(e,id)}><header><button type="button" className="market-drag" draggable aria-label={'拖动调整'+name+'的顺序'} onDragStart={e=>dragStart(e,id)}><GripVertical size={16}/></button><strong>{name}</strong><span>{statusText}</span></header><p>{reasonText}</p>{c.last_attempt && <small>最近检查 {time(c.last_attempt)}{c.last_finished ? ` · 完成 ${time(c.last_finished)}` : ''}</small>}<small>最近完整同步 {c.last_success ? time(c.last_success) : '尚未完成'}</small>{c.last_partial_success && <small>最近部分同步 {time(c.last_partial_success)}</small>}<div className="market-actions">{!readonly&&data.connection.mode==='local'&&<><button disabled={busy} className={connected?'':'market-primary'} onClick={()=>collect('login',id)}>{busy?'处理中…':c.state==='developer_unverified'?'切换企业／团队':connected?'重新登录':'登录后台'}</button><button disabled={busy} onClick={()=>collect('sync',id)}>同步 {name}</button>{connected&&<button disabled={busy} onClick={()=>collect(c.automatic?'pause':'resume',id)}>{c.automatic?'暂停自动':'启用自动'}</button>}</>}</div>{Object.keys(c.parts||{}).length>0&&<ul className="market-sync-parts" aria-label="分项同步结果">{Object.entries(c.parts).map(([key,part])=><li key={key}><span>{partLabel(key,id)}</span><span data-state={part.state}>{partStatus(part)}</span></li>)}</ul>}</article>;})}</div><p className="market-caption">版本、审核、下载和评论按实际权限分别核实；登录窗口打开不代表数据已接通。业务新增、日活与上传数据仍待业务接口接入。</p></section></>}
+  {tab==='channels'&&<><div className="market-panel"><div className="market-section-title"><h2>渠道上架进度</h2><span>线上版本与当前提审流程分开核对</span></div><div className="market-channel-grid">{[...data.channels].filter(c=>shownIds.includes(c.channel)).sort((a,b)=>orderedIds.indexOf(a.channel)-orderedIds.indexOf(b.channel)).map(c=><article key={c.channel} className={'market-channel'+(dropStore===c.channel?' is-drop':'')} onDragOver={e=>dragOver(e,c.channel)} onDragLeave={e=>dragLeave(e,c.channel)} onDrop={e=>dropOn(e,c.channel)}><header><button type="button" className="market-drag" draggable={!!prefs && !readonly} disabled={!prefs || readonly} aria-label={'拖动调整'+stores[c.channel]+'的顺序'} onDragStart={e=>dragStart(e,c.channel)}><GripVertical size={16}/></button><div className={'market-brand '+c.channel}>{stores[c.channel].slice(0,1)}</div><h3>{stores[c.channel]}</h3><span className={'market-status '+c.status}>{c.status==='reviewing'&&c.reason==='人工审核中'?c.reason:statuses[c.status]}</span></header><dl><div><dt>线上版本</dt><dd>{c.live_version||'待核实'}{c.live_code!=null&&<small> ({c.live_code})</small>}</dd></div><div><dt>更新版本</dt><dd>{c.pending_version||'未记录'}{c.pending_code!=null&&<small> ({c.pending_code})</small>}</dd></div><div><dt>提交 / 上架</dt><dd>{c.submitted_at||'—'} / {c.released_at||'—'}</dd></div><div><dt>商店评分</dt><dd>{c.rating==null?'待核实':`${c.rating} / 5`}{c.rating_count!=null&&<small> · {number(c.rating_count)} 次评分</small>}</dd></div></dl><ChannelAudit row={c} audit={providers[c.channel]?.parts?.audit} store={stores[c.channel]}/><p className="market-caption">核对日期：{c.as_of||'尚未提供'}<br/>保存时间：{time(c.updated_at)}</p><footer>{!readonly&&!screen&&<button onClick={()=>edit('channels',c)}>更新进度</button>}{c.url&&<a target="_blank" rel="noreferrer" href={c.url}>商店页面<ArrowUpRight size={13}/></a>}</footer></article>)}</div></div>
+  <section className="market-platform-connections" aria-label="商店连接" ref={connections}><div className="market-section-title"><h2>商店连接</h2><span>拖动左侧手柄调整顺序 · 登录会话各自隔离</span></div><div className="market-provider-grid">{(alertFocus && channel === 'all' && problems.length ? problems : shownIds).map(id=>{const name=stores[id];const c=providers[id]||{state:'needs_login'};const busy=c.state==='running';const connected=!!(c.last_success||c.last_partial_success);const statusText=(({ready:'同步成功',partial:'部分同步',running:'处理中',needs_login:connected?'需要重新登录':'待登录核实',needs_adapter:'待接通数据',needs_configuration:'待授权',profile_busy:'专用窗口使用中',browser_missing:'采集浏览器缺失',read_failed:'读取失败',app_not_found:'未找到 ISHO',access_denied:'权限不足',developer_unverified:'需企业／团队权限',auth_restore_failed:'会话需重新登录',auth_key_unavailable:'钥匙串不可用',interrupted:'上次任务中断',manual:'尚未启用'})[c.state]||'待核实');const reasonText=c.reason||'请先在官方页面完成登录，再核对 ISHO 的数据权限。';return <article key={id} tabIndex={-1} className={'market-provider '+(alertFocus?'is-target ':'')+(c.state==='ready'?'is-ready':'')+(dropStore===id?' is-drop':'')} onDragOver={e=>dragOver(e,id)} onDragLeave={e=>dragLeave(e,id)} onDrop={e=>dropOn(e,id)}><header><button type="button" className="market-drag" draggable={!!prefs && !readonly} disabled={!prefs || readonly} aria-label={'拖动调整'+name+'的顺序'} onDragStart={e=>dragStart(e,id)}><GripVertical size={16}/></button><strong>{name}</strong><span>{statusText}</span></header><p>{reasonText}</p>{c.last_attempt && <small>最近检查 {time(c.last_attempt)}{c.last_finished ? ` · 完成 ${time(c.last_finished)}` : ''}</small>}<small>最近完整同步 {c.last_success ? time(c.last_success) : '尚未完成'}</small>{c.last_partial_success && <small>最近部分同步 {time(c.last_partial_success)}</small>}<div className="market-actions">{!readonly&&data.connection.mode==='local'&&<><button disabled={busy} className={connected?'':'market-primary'} onClick={()=>id==='huawei'?(setError(''),setModal('huawei-auth')):collect('login',id)}>{busy?'处理中…':id==='huawei'?'配置授权':c.state==='developer_unverified'?'切换企业／团队':connected?'重新登录':'登录后台'}</button><button disabled={busy || c.state==='needs_configuration'} onClick={()=>collect('sync',id)}>同步 {name}</button>{connected&&<button disabled={busy} onClick={()=>collect(c.automatic?'pause':'resume',id)}>{c.automatic?'暂停自动':'启用自动'}</button>}</>}</div>{Object.keys(c.parts||{}).length>0&&<ul className="market-sync-parts" aria-label="分项同步结果">{Object.entries(c.parts).map(([key,part])=><li key={key}><span>{partLabel(key,id)}</span><span data-state={part.state}>{partStatus(part)}</span></li>)}</ul>}</article>;})}</div><p className="market-caption">版本、审核、下载和评论按实际权限分别核实；登录窗口打开不代表数据已接通。业务新增、日活与上传数据仍待业务接口接入。</p></section></>}
   {tab==='metrics'&&<div className="market-panel"><div className="market-section-title"><h2>数据明细</h2><div><button onClick={()=>download([data.fields.metrics.join(','),...detailRows.map(r=>data.fields.metrics.map(f=>csvValue(r[f])).join(','))].join('\r\n'),'isho-metrics.csv')}><ArrowDownToLine size={14}/>导出范围内明细</button>{!readonly&&<button className="market-primary" onClick={()=>edit('metrics')}>录入数据</button>}</div></div>{selectedDetailIds.length > 0 && <div className="market-date-chip"><span>所选渠道：{detailIds.map(id => stores[id]).join('、')}</span><button type="button" className="button" onClick={() => go({series:'',channel:'all'})}>显示全部渠道</button></div>}{detailDate && <div className="market-date-chip"><strong>{detailDate} · {stores[channel] || '全部商店'}</strong><button className="button" onClick={() => go({ date: '' })}><X size={14}/>清除日期</button></div>}<p className="market-caption">下载量按商店记录；新增、日活和上传量使用全应用 all 口径。活跃人数不跨日期累加。空值表示未知。</p><div className="market-table-scroll"><table><thead><tr><th>日期 / 来源</th><th>范围</th>{Object.entries(counts).map(([id,n])=><th key={id}>{n}</th>)}{!readonly&&<th>操作</th>}</tr></thead><tbody>{detailRows.map(r=><tr key={r.date+r.channel}><td>{r.date}<small>{r.source}</small></td><td>{stores[r.channel]||'全应用'}</td>{Object.keys(counts).map(k=><td key={k}>{number(r[k])}</td>)}{!readonly&&<td><button onClick={()=>edit('metrics',r)}>编辑</button></td>}</tr>)}</tbody></table></div>{!detailRows.length && <Empty text={detailDate ? "该日期与渠道没有明细记录。" : "所选渠道和日期范围暂无运营记录。"}/>}</div>}
-  {tab==='reviews'&&<div className="market-panel"><div className="market-section-title"><h2>用户评价</h2><span>当前已采集 {reviews.length} 条 · 样本好评为 4–5 星</span>{!readonly&&<button className="market-primary" onClick={()=>edit('reviews',{channel:channel==='all'?'oppo':channel})}>录入评论</button>}</div>{reviews.map(r=><article key={r.channel+r.external_id} className="market-review"><header><strong>{stores[r.channel]}</strong><span className="market-stars">{'★'.repeat(r.rating)}{'☆'.repeat(5-r.rating)}</span><small>{r.date} · {r.version||'版本未知'}</small>{!readonly&&<button onClick={()=>edit('reviews',r)}>编辑</button>}</header><p>{r.body||'无文字内容'}</p><small>来源：{r.source} · ID：{r.external_id}</small></article>)}{!reviews.length&&<Empty text="还没有采集到评论；这里不会用示例评论代替。"/>}</div>}
+  {tab==='reviews'&&<div className="market-panel"><div className="market-section-title"><h2>用户评价</h2><span>当前已采集 {reviews.length} 条 · 样本好评为 4–5 星</span>{!readonly&&orderedIds.length>0&&<button className="market-primary" onClick={()=>edit('reviews',{channel:channel==='all'?orderedIds[0]:channel})}>录入评论</button>}</div>{reviews.map(r=><article key={r.channel+r.external_id} className="market-review"><header><strong>{stores[r.channel]}</strong><span className="market-stars">{'★'.repeat(r.rating)}{'☆'.repeat(5-r.rating)}</span><small>{r.date} · {r.version||'版本未知'}</small>{!readonly&&<button onClick={()=>edit('reviews',r)}>编辑</button>}</header><p>{r.body||'无文字内容'}</p><small>来源：{r.source} · ID：{r.external_id}</small></article>)}{!reviews.length&&<Empty text="还没有采集到评论；这里不会用示例评论代替。"/>}</div>}
   {tab==='history'&&<div className="market-panel"><div className="market-section-title"><h2>最近 20 次数据变更</h2><span>保存与导入均保留原值，供服务端追溯</span></div>{data.history.map(r=><div className="market-history" key={r.id}><Check size={15}/><strong>{({channels:'上架进度',metrics:'数据明细',reviews:'用户评价',sync:'商店自动同步'})[r.action]}</strong><span>{time(r.at)}</span><small>{r.actor.endsWith('-collector')?(stores[r.actor.slice(0,-10)]||'商店')+' 只读采集器':r.actor==='admin'?'服务器管理员':'本机维护'}</small></div>)}{!data.history.length&&<Empty text="尚未修改运营数据。"/>}</div>}
   </>:!error&&<Empty text="正在连接运营数据…"/>}
-  {modal&&<div className="market-backdrop"><section role="dialog" aria-modal="true" aria-label={modal==='guide'?'数据接入说明':modal==='edit'?'编辑运营记录':'导入运营报表'} className="market-modal"><header><h2>{modal==='guide'?'数据接入说明':modal==='edit'?'更新运营记录':'导入报表'}</h2><button aria-label="关闭运营弹窗" disabled={saving} onClick={()=>setModal(null)}><X size={18}/></button></header>{error&&<div className="market-alert" role="alert">{error}</div>}
-   {modal==='guide'?<MarketGuide onImport={beginImport} readonly={readonly}/>:modal==='edit'?<form onSubmit={save}><p className="market-caption">只填写已核实的数据，未知项留空。若另一窗口已更新，保存会停止以保护已有记录。</p><div className="market-form">{data.fields[kind].map(f=><label key={f} className={['body','notes','reason'].includes(f)?'market-wide':''}>{kind==='reviews'&&f==='rating'?'评分（1–5）':names[f]}{f==='channel'?<select required value={form[f]??''} onChange={e=>setForm({...form,[f]:e.target.value})}><option value="">请选择</option>{kind==='metrics'&&<option value="all">全应用（all）</option>}{orderedIds.map(id=><option key={id} value={id}>{stores[id]}</option>)}</select>:f==='status'?<select value={form[f]??'unknown'} onChange={e=>setForm({...form,[f]:e.target.value})}>{Object.entries(statuses).map(([id,n])=><option key={id} value={id}>{n}</option>)}</select>:['body','notes','reason'].includes(f)?<textarea rows={3} value={form[f]??''} onChange={e=>setForm({...form,[f]:e.target.value})}/>:<input type={['date','as_of','submitted_at','released_at'].includes(f)?'date':f==='url'?'url':'text'} inputMode={f in counts||['rating','rating_count','live_code','pending_code'].includes(f)?'decimal':undefined} value={form[f]??''} maxLength={5000} onChange={e=>setForm({...form,[f]:e.target.value})}/>}</label>)}</div><footer><span>保存到 {data.connection.mode==='remote'?'统一运营服务器':'本机运营数据库'}</span><button disabled={saving} type="submit" className="market-primary"><Save size={15}/>{saving?'保存中…':'保存记录'}</button></footer></form>:<div className="market-import"><p>先下载模板并填入真实数据，再选择 CSV。日期采用 YYYY-MM-DD；downloads 等指标留空表示未知，不能用 0 替代。</p><label>报表类型<select value={kind} disabled={saving} onChange={e=>{setKind(e.target.value);setCsv('');setPreview(null);if(fileInput.current)fileInput.current.value='';}}>{[['channels','渠道版本与进度'],['metrics','下载、增长与业务数据'],['reviews','评分与用户评价']].map(([id,n])=><option key={id} value={id}>{n}</option>)}</select></label><div className="market-actions"><button onClick={()=>download([data.fields[kind].join(','),...data[kind].filter(r=>r.updated_at).map(r=>data.fields[kind].map(f=>csvValue(r[f])).join(','))].join('\r\n'),`isho-${kind}-records.csv`)}>导出该类现有记录</button><button onClick={()=>download(data.fields[kind].join(',')+'\r\n',`isho-${kind}-template.csv`)}><Download size={15}/>下载空白模板</button><input ref={fileInput} aria-label="选择运营 CSV 文件" type="file" accept=".csv,text/csv" disabled={saving} onChange={async e=>{const file=e.target.files[0];setPreview(null);setError('');if(!file)return;if(file.size>512*1024){setCsv('');setError('文件不能超过 512 KB');return;}setCsv(await file.text());}}/></div><p className="market-caption">使用 UTF-8 CSV；同一日期与渠道的指标作为一条完整记录更新，留空字段会保存为未知。评论按渠道与唯一 ID 去重。一次最多 2000 行，任何行校验失败则整批不写入。</p>{csv&&<button disabled={saving} onClick={()=>importCsv(false)}>预览并校验</button>}{preview&&<><p className="market-preview-note">共 {preview.count} 条，其中 {preview.replace} 条将更新已有记录。下方展示前 8 条；点击确认才会写入。</p><pre>{JSON.stringify(preview.preview,null,2)}</pre><button className="market-primary" disabled={saving} onClick={()=>importCsv(true)}>{saving?'导入中…':'确认导入这些记录'}</button></>}</div>}
+  {modal&&<div className="market-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="market-modal-title" className={'market-modal'+(['channel-settings','huawei-auth'].includes(modal)?' market-settings-modal':'')}><header><h2 id="market-modal-title">{{guide:'数据接入说明',edit:'更新运营记录',import:'导入报表','channel-settings':'管理渠道','huawei-auth':'华为 AppGallery 授权'}[modal]}</h2><button aria-label="关闭运营弹窗" disabled={saving} onClick={()=>setModal(null)}><X size={18}/></button></header>{error&&<div className="market-alert" role="alert">{error}</div>}
+   {modal==='channel-settings'?<ChannelSettings stores={stores} order={editingChannels.order} hidden={editingChannels.hidden} saving={saving} onSave={next=>saveChannelSettings(next,editingChannels.revision,true)}/>:modal==='huawei-auth'?<HuaweiAuthorization saving={saving} onSave={authorizeHuawei}/>:modal==='guide'?<MarketGuide onImport={beginImport} readonly={readonly}/>:modal==='edit'?<form onSubmit={save}><p className="market-caption">只填写已核实的数据，未知项留空。若另一窗口已更新，保存会停止以保护已有记录。</p><div className="market-form">{data.fields[kind].map(f=><label key={f} className={['body','notes','reason'].includes(f)?'market-wide':''}>{kind==='reviews'&&f==='rating'?'评分（1–5）':names[f]}{f==='channel'?<select required value={form[f]??''} onChange={e=>setForm({...form,[f]:e.target.value})}><option value="">请选择</option>{kind==='metrics'&&<option value="all">全应用（all）</option>}{allIds.map(id=><option key={id} value={id}>{stores[id]}</option>)}</select>:f==='status'?<select value={form[f]??'unknown'} onChange={e=>setForm({...form,[f]:e.target.value})}>{Object.entries(statuses).map(([id,n])=><option key={id} value={id}>{n}</option>)}</select>:['body','notes','reason'].includes(f)?<textarea rows={3} value={form[f]??''} onChange={e=>setForm({...form,[f]:e.target.value})}/>:<input type={['date','as_of','submitted_at','released_at'].includes(f)?'date':f==='url'?'url':'text'} inputMode={f in counts||['rating','rating_count','live_code','pending_code'].includes(f)?'decimal':undefined} value={form[f]??''} maxLength={5000} onChange={e=>setForm({...form,[f]:e.target.value})}/>}</label>)}</div><footer><span>保存到 {data.connection.mode==='remote'?'统一运营服务器':'本机运营数据库'}</span><button disabled={saving} type="submit" className="market-primary"><Save size={15}/>{saving?'保存中…':'保存记录'}</button></footer></form>:<div className="market-import"><p>先下载模板并填入真实数据，再选择 CSV。日期采用 YYYY-MM-DD；downloads 等指标留空表示未知，不能用 0 替代。</p><label>报表类型<select value={kind} disabled={saving} onChange={e=>{setKind(e.target.value);setCsv('');setPreview(null);if(fileInput.current)fileInput.current.value='';}}>{[['channels','渠道版本与进度'],['metrics','下载、增长与业务数据'],['reviews','评分与用户评价']].map(([id,n])=><option key={id} value={id}>{n}</option>)}</select></label><div className="market-actions"><button onClick={()=>download([data.fields[kind].join(','),...data[kind].filter(r=>r.updated_at).map(r=>data.fields[kind].map(f=>csvValue(r[f])).join(','))].join('\r\n'),`isho-${kind}-records.csv`)}>导出该类现有记录</button><button onClick={()=>download(data.fields[kind].join(',')+'\r\n',`isho-${kind}-template.csv`)}><Download size={15}/>下载空白模板</button><input ref={fileInput} aria-label="选择运营 CSV 文件" type="file" accept=".csv,text/csv" disabled={saving} onChange={async e=>{const file=e.target.files[0];setPreview(null);setError('');if(!file)return;if(file.size>512*1024){setCsv('');setError('文件不能超过 512 KB');return;}setCsv(await file.text());}}/></div><p className="market-caption">使用 UTF-8 CSV；同一日期与渠道的指标作为一条完整记录更新，留空字段会保存为未知。评论按渠道与唯一 ID 去重。一次最多 2000 行，任何行校验失败则整批不写入。</p>{csv&&<button disabled={saving} onClick={()=>importCsv(false)}>预览并校验</button>}{preview&&<><p className="market-preview-note">共 {preview.count} 条，其中 {preview.replace} 条将更新已有记录。下方展示前 8 条；点击确认才会写入。</p><pre>{JSON.stringify(preview.preview,null,2)}</pre><button className="market-primary" disabled={saving} onClick={()=>importCsv(true)}>{saving?'导入中…':'确认导入这些记录'}</button></>}</div>}
   </section></div>}
  </section>;
 }
@@ -296,23 +348,24 @@ function ReviewStrip({reviews,orderedIds,stores}){
 function MarketGuide({onImport,readonly}){
  return <div className="market-guide">
   <p>「刷新记录」重新读取已保存的运营数据。本机模式下，打开「上架进度」，在「商店连接」点对应渠道的同步按钮即可立即采集。</p>
-  <p>「同步全部渠道」在后台读取五家商店，按渠道反馈结果并自动更新大盘。</p>
+  <p>「同步全部渠道」在后台读取当前可见的商店，按渠道反馈结果并自动更新大盘。</p>
   <p>本机服务运行时，已启用的渠道各自约每 30 分钟同步。下载量来自渠道的日报，通常采集到前一天。登录过期时可重新登录该商店。</p>
   <h3>先准备什么</h3>
   <ul><li>OPPO：首次在隔离浏览器中登录；登录态只留本机，采集器只保存运营字段，不保存账号、密钥和测试账号。</li><li>其他渠道：后续逐个平台验证登录授权与只读页面接口，再接入自动同步；CSV 保留为可选备用。</li><li>新增、活跃、留存与上传量：你们业务后台的聚合报表或只读统计接口，商店后台不能代替业务云端数据。</li></ul>
   <p>当前导入器接收 Hub 模板格式的 UTF-8 CSV，不会自动识别各平台的原始 Excel / CSV。优先使用上方各平台的独立登录入口，CSV 只作为备用导入方式。</p>
-  <h3>五个平台的接入准备</h3>
+  <h3>商店接入准备</h3>
   <div className="market-table-scroll"><table><thead><tr><th>平台</th><th>API 接入准备</th><th>当前可行路径与边界</th></tr></thead><tbody>
    <tr><td><a href="https://open.oppomobile.com/" target="_blank" rel="noreferrer">OPPO 后台</a></td><td>软件商店对应的 API 服务权限及客户端凭据；集成指南使用 client_id / client_secret，需在你账号中核实具体能力。</td><td>已接入本机隔离浏览器登录会话；只读查询版本、审核、每日净下载量和评论，不上传、不提审、不发布。</td></tr>
    <tr><td><a href="https://dev.vivo.com.cn/" target="_blank" rel="noreferrer">vivo 后台</a></td><td>国内商店账号的 API 管理 / 传包授权；集成指南使用 access_key / access_secret，需核对国内账号及接口范围。</td><td>使用该平台的独立登录窗口，登录后分别核对版本、审核、下载和评价查询。</td></tr>
    <tr><td><a href="https://dev.mi.com/" target="_blank" rel="noreferrer">小米后台</a></td><td>开发者账号、专用 API 私钥及平台公钥；不要重置现有密钥影响其他工具。</td><td>官方传包文档 FAQ 说明尚未开放查询审核中 / 在架应用信息和状态；包查询不等于审核状态接口，通过用户登录后台核对只读页面查询能力。</td></tr>
    <tr><td><a href="https://app.open.qq.com/" target="_blank" rel="noreferrer">应用宝后台</a></td><td>核实该应用所属账号及查询权限。</td><td>读取线上版本和每日下载量。提审详情、评论未接入。</td></tr>
    <tr><td><a href="https://developer.honor.com/cn/" target="_blank" rel="noreferrer">荣耀后台</a></td><td>荣耀开发者账号及 ISHO 所属团队的应用查询权限。</td><td>读取线上版本、提审状态、对应版本的驳回原因及每日新下载量。评论未接入。</td></tr>
+   <tr><td><a href="https://developer.huawei.com/consumer/cn/service/josp/agc/index.html" target="_blank" rel="noreferrer">华为 AppGallery</a></td><td>中国站点的 API 客户端及 ISHO App ID，核对应用类型和查询权限。</td><td>读取线上版本、发布审核状态、每日新下载和中国区评论。</td></tr>
   </tbody></table></div>
   <h3>登录、抓包和后续维护</h3>
   <p>不需要把账号密码、短信验证码、Cookie、Token 或私钥发到聊天。若后续需浏览器辅助核对，由你在本机登录并授权只读查看；可在该范围内分析页面请求，但不能绕过验证码或保证私有接口长期稳定。手机端抓包通常也不能提供开发者后台的审核和运营报表。</p>
   <p>Hub 可继续由维护者修改来源、适配报表并构建新版 App。OPPO 定时采集器随本机 Hub 服务运行，关机或退出服务期间不采集，重新打开后到期补采。当前没有云端常驻采集服务或 App 自动升级器。Git 提交、推送、服务器部署与商店发布按各自授权执行。</p>
-  <p className="market-caption">核对日期：2026-10-30。参考：<a href="https://uniapp.dcloud.io/uni-publish/config.html" target="_blank" rel="noreferrer">DCloud 发布接入指南</a> · <a href="https://dev.mi.com/distribute/doc/details?pId=1134" target="_blank" rel="noreferrer">小米官方接口与 FAQ</a> · <a href="https://open.tencent.com/" target="_blank" rel="noreferrer">腾讯官方入口</a>。文档声明不等于你账号已取得权限。</p>
+  <p className="market-caption">核对日期：2026-11-20。参考：<a href="https://uniapp.dcloud.io/uni-publish/config.html" target="_blank" rel="noreferrer">DCloud 发布接入指南</a> · <a href="https://dev.mi.com/distribute/doc/details?pId=1134" target="_blank" rel="noreferrer">小米官方接口与 FAQ</a> · <a href="https://open.tencent.com/" target="_blank" rel="noreferrer">腾讯官方入口</a>。文档声明不等于你账号已取得权限。</p>
   {!readonly&&<div className="market-actions"><button className="market-primary" onClick={onImport}>下载模板 / 导入 CSV</button></div>}
  </div>;
 }

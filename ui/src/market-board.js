@@ -1,4 +1,5 @@
 export const storeAlerts = {
+  needs_configuration: '待授权',
   needs_login: '需核实登录', auth_restore_failed: '会话已失效', auth_key_unavailable: '钥匙串不可用',
   browser_missing: '采集浏览器缺失', profile_busy: '专用窗口被占用', access_denied: '缺少查询权限',
   developer_unverified: '需核实企业权限', read_failed: '读取失败', app_not_found: '未找到应用',

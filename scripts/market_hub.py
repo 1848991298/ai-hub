@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 ZONE=ZoneInfo("Asia/Shanghai")
 from urllib.parse import urlsplit
 
-CHANNELS = {'oppo':'OPPO', 'vivo':'vivo', 'xiaomi':'小米', 'tencent':'应用宝', 'honor':'荣耀'}
-STATES = {'unknown':'待核实', 'not_submitted':'未提交', 'reviewing':'审核中', 'rejected':'已驳回', 'approved':'待发布', 'live':'已上架', 'offline':'已下架'}
+CHANNELS = {'oppo':'OPPO', 'vivo':'vivo', 'xiaomi':'小米', 'tencent':'应用宝', 'honor':'荣耀', 'huawei':'华为 AppGallery'}
+STATES = {'unknown':'待核实', 'not_submitted':'未提交', 'reviewing':'审核中', 'rejected':'已驳回', 'approved':'待发布', 'live':'已上架', 'offline':'已下架', 'taking_down':'申请下架', 'takedown_rejected':'下架审核未通过', 'withdrawn':'已撤销'}
 COUNTS = ('downloads','new_users','active_users','uploaded_records','uploaded_bytes','upload_failures','cohort_users','retained_d1','retained_d7')
 FIELDS = {
  'channels': ('channel','live_version','live_code','pending_version','pending_code','status','submitted_at','released_at','reason','url','rating','rating_count','as_of','notes'),
@@ -50,7 +50,7 @@ def clean(kind, value):
  numeric=set(COUNTS)|{'live_code','pending_code','rating','rating_count'}
  for f,v in row.items():
   if f not in numeric and not isinstance(v,str): raise MarketError(f'{f} 必须为文本。')
- if row['channel'] not in CHANNELS and not (kind=='metrics' and row['channel']=='all'): raise MarketError('请选择已支持的五个商店；全应用指标使用 all。')
+ if row['channel'] not in CHANNELS and not (kind=='metrics' and row['channel']=='all'): raise MarketError('请选择已支持的商店；全应用指标使用 all。')
  if kind=='channels':
   if row['status'] not in STATES: raise MarketError('审核状态不受支持。')
   for f in ('live_code','pending_code','rating_count'): row[f]=integer(row[f],f)
@@ -91,7 +91,7 @@ class MarketService:
   self.path=Path(path)
   self.path.parent.mkdir(parents=True,exist_ok=True)
   with self.connect() as db:
-   db.executescript('CREATE TABLE IF NOT EXISTS meta(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL); INSERT OR IGNORE INTO meta VALUES(1,0); CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL,id TEXT NOT NULL,body TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,at TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,before_json TEXT NOT NULL,after_json TEXT NOT NULL);')
+   db.executescript('CREATE TABLE IF NOT EXISTS meta(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL); INSERT OR IGNORE INTO meta VALUES(1,0); CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL,id TEXT NOT NULL,body TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS channel_preferences(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,at TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,before_json TEXT NOT NULL,after_json TEXT NOT NULL);')
  @contextmanager
  def connect(self):
   db=sqlite3.connect(self.path,timeout=10);db.row_factory=sqlite3.Row
@@ -103,12 +103,42 @@ class MarketService:
    db.execute('BEGIN')
    revision=db.execute('SELECT revision FROM meta').fetchone()[0]
    rows=db.execute('SELECT * FROM records ORDER BY kind,id').fetchall()
+   preferences = self.channel_preferences(db)
    history=[dict(r) for r in db.execute('SELECT id,at,actor,action FROM history ORDER BY id DESC LIMIT 20')]
   groups={k:[] for k in FIELDS}
   for r in rows: groups[r['kind']].append({**json.loads(r['body']),'updated_at':r['updated_at']})
   registered={r['channel']:r for r in groups['channels']}
   groups['channels']=[registered.get(k,{'channel':k,'status':'unknown','updated_at':None}) for k in CHANNELS]
-  return dict(schema_version=1,product={'name':'ISHO','package':'com.jryx.isho'},revision=revision,generated_at=stamp(),channels_map=CHANNELS,statuses=STATES,fields=FIELDS,history=history,**groups,connection={'mode':'local','label':'本机数据库 · 网页与 App 共用'},collection={'state':'manual','reason':'尚未配置商店 API 或业务统计接口；支持手动录入和 CSV 导入。'})
+  return dict(schema_version=1,channel_preferences=preferences,product={'name':'ISHO','package':'com.jryx.isho'},revision=revision,generated_at=stamp(),channels_map=CHANNELS,statuses=STATES,fields=FIELDS,history=history,**groups,connection={'mode':'local','label':'本机数据库 · 网页与 App 共用'},collection={'state':'manual','reason':'尚未配置商店 API 或业务统计接口；支持手动录入和 CSV 导入。'})
+ def channel_preferences(self, db):
+  stored = db.execute('SELECT revision,body FROM channel_preferences WHERE id=1').fetchone()
+  if stored is None:
+   return {'revision':0,'order':list(CHANNELS),'hidden':[]}
+  body = json.loads(stored['body'])
+  order = [channel for channel in body['order'] if channel in CHANNELS]
+  return {
+   'revision':stored['revision'],
+   'order':order + [channel for channel in CHANNELS if channel not in order],
+   'hidden':[channel for channel in body['hidden'] if channel in CHANNELS],
+  }
+ def save_channel_preferences(self, body):
+  if set(body) != {'order','hidden','revision'} or type(body['revision']) is not int or body['revision'] < 0:
+   raise MarketError('渠道设置格式不合法。')
+  for name in ('order','hidden'):
+   ids = body[name]
+   if not isinstance(ids,list) or len(ids)>len(CHANNELS) or not all(isinstance(i,str) and i in CHANNELS for i in ids) or len(set(ids))!=len(ids):
+    raise MarketError('渠道设置包含重复或未知的渠道。')
+  order = body['order'] + [item for item in CHANNELS if item not in body['order']]
+  hidden = [item for item in order if item in body['hidden']]
+  with self.connect() as db:
+   db.execute('BEGIN IMMEDIATE')
+   current = self.channel_preferences(db)
+   if current['revision'] != body['revision']:
+    raise MarketError('渠道设置已在另一窗口更新。请重新打开渠道管理。',409)
+   revision = current['revision'] + 1
+   db.execute('INSERT INTO channel_preferences VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,body=excluded.body',
+              (revision,dump({'order':order,'hidden':hidden})))
+  return {'channel_preferences':{'revision':revision,'order':order,'hidden':hidden}}
  def parse_csv(self,kind,content):
   if kind not in FIELDS or not isinstance(content,str) or len(content.encode('utf-8'))>512*1024: raise MarketError('请选择支持的 CSV 类型，文件不超过 512 KB。')
   try:
@@ -172,6 +202,7 @@ class MarketService:
   return len(after)
  def dispatch(self,action,body,actor='local'):
   if not isinstance(body,dict): raise MarketError('请求必须是对象。')
+  if action=='channel-preferences':return self.save_channel_preferences(body)
   if action=='save':
    if set(body)!={'kind','row','revision'}: raise MarketError('保存字段不合法。')
    return self.write_rows(body['kind'],[clean(body['kind'],body['row'])],body['revision'],actor)

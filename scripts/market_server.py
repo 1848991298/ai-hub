@@ -47,7 +47,7 @@ class MarketBridge:
  def call(self,action,body=None):
   config=self.remote()
   if config:
-   if action=='collect': raise MarketError('当前连接运营服务器；商店登录采集仅在本机模式运行。',403)
+   if action in ('collect','huawei-auth'): raise MarketError('当前连接运营服务器；商店授权与采集仅在本机模式运行。',403)
    url=config['url'].rstrip('/');auth=base64.b64encode((config['username']+':'+config['password']).encode()).decode()
    request=Request(url+'/api/market/'+action,data=None if body is None else json.dumps(body,ensure_ascii=False).encode(),headers={'Authorization':'Basic '+auth,'Content-Type':'application/json','Origin':url})
    try:
@@ -66,6 +66,7 @@ class MarketBridge:
   collector=self.local_collectors()
   collector.start_scheduler()
   if action=='collect':return collector.control(body)
+  if action=='huawei-auth':return collector.items['huawei'].configure_huawei(body)
   if action=='snapshot':
    # 先取得采集结果，再读库。批次完成时响应一定包含刚写入的数据。
    collection=collector.snapshot()
@@ -80,7 +81,7 @@ def handle_market(handler, service, post=False, actor='local'):
  action=path.removeprefix('/api/market/') if hasattr(path,'removeprefix') else path[len('/api/market/'):]
  try:
   if post:
-   if action not in ('save','import','collect') or (action=='collect' and not isinstance(service,MarketBridge)): raise MarketError('运营接口不存在。',404)
+   if action not in ('save','import','collect','channel-preferences','huawei-auth') or (action in ('collect','huawei-auth') and not isinstance(service,MarketBridge)): raise MarketError('运营接口不存在。',404)
    size=int(handler.headers.get('Content-Length','0'))
    if not 0<size<=700*1024: raise MarketError('请求过大或为空。')
    body=json.loads(handler.rfile.read(size))

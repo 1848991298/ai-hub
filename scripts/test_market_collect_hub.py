@@ -6,7 +6,7 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from market_hub import MarketService,MarketError
+from market_hub import CHANNELS,MarketService,MarketError
 from market_collect import MarketCollector,MarketCollectors
 class CollectorTests(unittest.TestCase):
  def setUp(self):
@@ -50,14 +50,15 @@ class CollectorTests(unittest.TestCase):
   vivo=MarketCollector(self.root,self.service,'vivo');honor=MarketCollector(self.root,self.service,'honor')
   vivo.enable(True);honor.enable(True);vivo.enable(False)
   self.assertTrue(self.collector.enabled());self.assertTrue(honor.enabled());self.assertFalse(vivo.enabled())
- def test_provider_binding_and_five_channels(self):
+ def test_provider_binding_and_channel_registry(self):
   groups=self.groups()
   for rows in groups.values():
    for row in rows:row['channel']='honor'
   self.assertEqual(self.service.ingest_provider('honor',groups),3)
   self.assertTrue(all(c['status']=='unknown' for c in self.service.snapshot()['channels'] if c['channel']!='honor'))
   with self.assertRaises(MarketError):self.service.ingest_provider('vivo',groups)
-  self.assertEqual(len(MarketCollectors(self.root,self.service).snapshot()['providers']),5)
+  self.assertEqual(set(MarketCollectors(self.root,self.service).snapshot()['providers']),set(CHANNELS))
+  self.assertEqual(MarketCollector(self.root,self.service,'huawei').snapshot()['state'],'needs_configuration')
  def test_partial_result_enables_only_verified_platform(self):
   payload={'provider':'vivo','package':'com.jryx.isho','state':'partial','rows':{'channels':[{'channel':'vivo','status':'live','live_version':'1.0.2'}],'metrics':[],'reviews':[]},'parts':{'channels':{'state':'ok'},'reviews':{'state':'read_failed'}}}
   from types import SimpleNamespace
@@ -110,6 +111,27 @@ class CollectorTests(unittest.TestCase):
    import fcntl
    with open(self.root/'.local/market-collector.lock','a') as lock:
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);self.assertFalse(self.collector.start())
+ def test_huawei_auth_requires_success_before_storing_and_does_not_expose_credentials(self):
+  collector=MarketCollector(self.root,self.service,'huawei')
+  config={'platform':'harmony','app_id':'12345','client_id':'fixture-id','client_secret':'fixture-secret'}
+  from market_huawei import HuaweiError
+  with patch('market_huawei.read_release',side_effect=HuaweiError('app_not_found')), patch('market_huawei.save_credentials') as save:
+   with self.assertRaises(MarketError):
+    collector.configure_huawei(config)
+   save.assert_not_called()
+  with patch('market_huawei.read_release'), patch('market_huawei.save_credentials') as save, patch.object(collector,'start',return_value=True):
+   result=collector.configure_huawei(config)
+   save.assert_called_once_with(config)
+  self.assertTrue(result['started'])
+  self.assertNotIn('fixture-secret',json.dumps(result))
+ def test_explicit_batch_scope_rejects_unknown_empty_or_multiple_modes(self):
+  manager=MarketCollectors(self.root,self.service)
+  for scope in ([],['huawei','huawei'],['offlist'],[['vivo']]):
+   with self.assertRaises(MarketError):
+    manager.control({'operation':'sync_all','providers':scope})
+  with patch.object(manager,'start_batch') as start:
+   manager.control({'operation':'sync_all','providers':['vivo','huawei']})
+   start.assert_called_once_with(['vivo','huawei'])
  def test_bulk_sync_joins_active_attempt_and_reports_this_run(self):
   manager=MarketCollectors(self.root,self.service)
   release=threading.Event()
@@ -127,8 +149,8 @@ class CollectorTests(unittest.TestCase):
    return SimpleNamespace(returncode=0,stdout=json.dumps(payload))
   with patch('market_collect.shutil.which',return_value='/test/node'), patch('market_collect.subprocess.run',side_effect=collect):
    self.assertTrue(manager.items['oppo'].start())
-   first=manager.control({'operation':'sync_all'})
-   second=manager.control({'operation':'sync_all'})
+   first=manager.control({'operation':'sync_all','providers':list(states)})
+   second=manager.control({'operation':'sync_all','providers':list(states)})
    self.assertTrue(first['started'])
    self.assertFalse(second['started'])
    self.assertEqual(first['batch']['id'],second['batch']['id'])

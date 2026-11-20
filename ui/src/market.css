@@ -164,3 +164,27 @@
 .market-batch-channel [data-result="ready"]{color:var(--positive,#36856b)}
 .market-batch-channel [data-result="login"],.market-batch-channel [data-result="partial"]{color:var(--warning,#9b6a2f)}
 .market-batch-channel [data-result="failed"]{color:var(--danger,#b54d48)}
+
+.market-settings-modal { width: min(100%, 570px); }
+.market-channel-settings > p,
+.market-huawei-auth > p { margin: 0 0 14px; }
+.market-channel-settings-list { list-style: none; padding: 0; margin: 0; }
+.market-channel-settings-list > li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 46px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--mo-border);
+}
+.market-channel-settings-list > li.is-drop { outline: 1px solid var(--mo-accent); border-radius: 7px; }
+.market-channel-settings-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.market-visibility, .market-sort-actions { display: flex; align-items: center; gap: 6px; }
+.market-visibility { min-width: 74px; }
+.market-visibility input { width: auto; min-height: 0; accent-color: var(--mo-accent); }
+.market-sort-actions button { padding: 4px 6px; min-width: 28px; }
+.market-huawei-auth > a { display: inline-flex; align-items: center; gap: 4px; margin-bottom: 12px; }
+.market-huawei-auth fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.market-no-channels { display: flex; gap: 12px; align-items: center; margin: 12px 0; }
+.market-brand.huawei { color: #a64443; background: #f4e7e5; }

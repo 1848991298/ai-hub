@@ -9,7 +9,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = ('market_hub.py', 'market_server.py', 'market_collect.py', 'test_market_hub.py', 'test_market_collect_hub.py')
+CORE = ('market_hub.py', 'market_server.py', 'market_collect.py', 'market_huawei.py', 'test_market_hub.py', 'test_market_collect_hub.py', 'test_market_huawei.py')
 BROWSER = ('auth.mjs', 'oppo.mjs', 'oppo-data.mjs', 'portal.mjs', 'portals.mjs', 'profile.mjs', 'test-oppo.mjs', 'test-platforms.mjs', 'test-reviews.mjs')
 ADAPTERS = ('common.mjs', 'honor.mjs', 'review-data.mjs', 'vivo.mjs', 'xiaomi.mjs')
 TEMPLATE = ('server.py', 'setup.command', 'start.command', 'README.md', '.gitignore', '.dockerignore', 'ui/index.html', 'ui/vite.config.js', 'ui/package.json', 'ui/package-lock.json', 'ui/src/main.jsx', 'ui/src/connection.css', 'deploy/Dockerfile', 'deploy/compose.yaml', 'tests/test_connection.py')
@@ -20,7 +20,7 @@ def sources():
     files += [(ROOT / 'scripts' / name, 'scripts/' + name) for name in CORE]
     files += [(ROOT / 'scripts/market-browser' / name, 'scripts/market-browser/' + name) for name in BROWSER]
     files += [(ROOT / 'scripts/market-browser/adapters' / name, 'scripts/market-browser/adapters/' + name) for name in ADAPTERS]
-    files += [(ROOT / 'ui/src' / name, 'ui/src/' + name) for name in ('MarketPage.jsx', 'market.css')]
+    files += [(ROOT / 'ui/src' / name, 'ui/src/' + name) for name in ('MarketPage.jsx', 'MarketChannelSettings.jsx', 'MarketDashboard.jsx', 'market.css', 'market-dashboard.css', 'market-board.js', 'market-order.js')]
     files += [(ROOT / 'ui/src/market-main.jsx', 'ui/src/market-main.jsx'), (ROOT / 'ui/market.html', 'ui/market.html')]
     return files
 

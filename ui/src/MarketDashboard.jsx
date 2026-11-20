@@ -3,7 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, Maximize2, RotateCcw, X } from 
 import { aggregateTimeline, buildBoard, calendarPoints, chartTicks, selectChannels, timelineRows } from './market-board.js';
 import './market-dashboard.css';
 
-const colors = { oppo: '#24956c', vivo: '#4d78dc', xiaomi: '#d89429', tencent: '#9670ce', honor: '#c77495' };
+const colors = { oppo: '#24956c', vivo: '#4d78dc', xiaomi: '#d89429', tencent: '#9670ce', honor: '#c77495', huawei: '#bb514a' };
 const color = id => colors[id] || '#517d9c';
 const number = value => value == null ? '—' : value.toLocaleString('zh-CN', { maximumFractionDigits: 1 });
 const span = row => row.start === row.end ? row.start : `${row.start} — ${row.end}`;

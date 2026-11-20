@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from market_hub import MarketService,MarketError,clean
+from market_hub import CHANNELS,MarketService,MarketError,clean
 from market_server import MarketHandler,MarketBridge
 
 class MarketTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class MarketTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name);self.service=MarketService(self.root/'market.sqlite')
  def save(self,kind,row,revision=None):return self.service.dispatch('save',dict(kind=kind,row=row,revision=self.service.snapshot()['revision'] if revision is None else revision))
  def test_empty_is_real_unknown_not_demo(self):
-  s=self.service.snapshot();self.assertEqual(s['product']['package'],'com.jryx.isho');self.assertEqual(len(s['channels']),5);self.assertTrue(all(r['status']=='unknown' for r in s['channels']));self.assertEqual(s['metrics'],[])
+  s=self.service.snapshot();self.assertEqual(s['product']['package'],'com.jryx.isho');self.assertEqual([r['channel'] for r in s['channels']],list(CHANNELS));self.assertTrue(all(r['status']=='unknown' for r in s['channels']));self.assertEqual(s['metrics'],[])
  def test_release_and_pending_are_independent(self):
   self.save('channels',dict(channel='oppo',status='reviewing',live_version='1.0.0',pending_version='1.0.1',as_of='2026-01-01'))
   r=self.service.snapshot()['channels'][0];self.assertEqual(r['live_version'],'1.0.0');self.assertEqual(r['status'],'reviewing');self.assertEqual(len(self.service.snapshot()['history']),1)
@@ -60,6 +60,22 @@ class MarketTests(unittest.TestCase):
   self.assertEqual(len(self.service.snapshot()['reviews']),1);self.assertEqual(self.service.snapshot()['reviews'][0]['rating'],4)
  def test_restart_persists_and_other_rows_untouched(self):
   self.save('channels',dict(channel='oppo',status='reviewing'));again=MarketService(self.root/'market.sqlite');self.assertEqual(again.snapshot()['revision'],1);self.assertEqual(again.snapshot()['channels'][1]['status'],'unknown')
+ def test_channel_layout_is_shared_and_concurrent_edits_are_rejected(self):
+  self.save('channels',dict(channel='tencent',status='reviewing',live_version='1.0.6'))
+  first = self.service.dispatch('channel-preferences',{'order':['huawei','oppo'],'hidden':['tencent'],'revision':0})
+  self.assertEqual(first['channel_preferences']['order'][:2],['huawei','oppo'])
+  mirror = MarketService(self.root/'market.sqlite')
+  snapshot = mirror.snapshot()
+  self.assertEqual(snapshot['channel_preferences'],first['channel_preferences'])
+  self.assertEqual(snapshot['revision'],1)
+  self.assertEqual(next(row['live_version'] for row in snapshot['channels'] if row['channel']=='tencent'),'1.0.6')
+  with self.assertRaises(MarketError) as error:
+   mirror.dispatch('channel-preferences',{'order':[],'hidden':[],'revision':0})
+  self.assertEqual(error.exception.status,409)
+  with self.assertRaises(MarketError):
+   mirror.dispatch('channel-preferences',{'order':['huawei','huawei'],'hidden':[],'revision':1})
+  second = mirror.dispatch('channel-preferences',{'order':['huawei'],'hidden':[],'revision':1})
+  self.assertEqual(second['channel_preferences']['hidden'],[])
  def test_remote_invalid_config_does_not_use_local_silently(self):
   (self.root/'.local').mkdir();(self.root/'.local/market-remote.json').write_text('{"url":"http://remote.example"}')
   with self.assertRaises(MarketError):MarketBridge(self.root).call('snapshot')
@@ -80,6 +96,12 @@ class ServerTests(unittest.TestCase):
    self.assertEqual(req('/api/market/snapshot',None)[0],401)
    s,raw=req('/api/market/snapshot','screen');self.assertEqual(s,200);self.assertTrue(json.loads(raw)['read_only'])
    self.assertEqual(req('/api/market/collect','admin','POST',{'operation':'sync'},f'http://127.0.0.1:{server.server_port}')[0],404)
+   origin=f'http://127.0.0.1:{server.server_port}'
+   preferences={'order':['huawei'],'hidden':['tencent'],'revision':0}
+   self.assertEqual(req('/api/market/channel-preferences','screen','POST',preferences,origin)[0],403)
+   self.assertEqual(req('/api/market/huawei-auth','admin','POST',{},origin)[0],404)
+   self.assertEqual(req('/api/market/channel-preferences','admin','POST',preferences,origin)[0],200)
+   self.assertEqual(json.loads(req('/api/market/snapshot','screen')[1])['channel_preferences']['hidden'],['tencent'])
    self.assertEqual(req('/api/rules')[0],404);self.assertEqual(req('/index.html')[0],404);self.assertEqual(req('/.local/x')[0],404)
    body=dict(kind='channels',row=dict(channel='oppo',status='live'),revision=0)
    self.assertEqual(req('/api/market/save','screen','POST',body)[0],403)

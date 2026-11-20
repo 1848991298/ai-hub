@@ -40,7 +40,7 @@ OPPO、vivo、小米读取版本、审核、下载与评论。小米保留「人
 
 账号有对应 ISHO 查询权限后才能取得真实数据。服务运行期间，每 30 分钟同步已经启用的渠道；关机、休眠、关闭服务时不采集。平台登录过期需要在官方窗口补登。下载、更新、安装次数、评分数量与文字评论数分别处理；未知值不填 0。不自动上传、提审、发布或回复评论。
 
-本机模式下，点顶部「同步全部渠道」可后台采集五家商店。进度和各渠道结果在顶部显示，批次结束后自动刷新大盘。「刷新本机记录」会重新读取已保存的数据。
+本机模式下，点顶部「同步全部渠道」可后台采集当前可见商店。进度和各渠道结果在顶部显示，批次结束后自动刷新大盘。「刷新本机记录」会重新读取已保存的数据。
 
 ### 共享服务器
 
@@ -99,3 +99,10 @@ npm --prefix ui run build
 ### 小米定时上架与分项隔离
 
 小米返回“审核通过，定时上架”时记录为待发布，保留官方状态说明；当前线上版本仍取 `onlineVersion`，不能提前使用待上架版本。应用包名和 ID 校验通过后，版本审核、下载和评论独立采集：遇到未知审核状态，仅版本分项报 `unknown_status` 并保留旧记录，仍继续读取下载与评论；身份不匹配仍停止整批。不把状态解析错误当作登录过期。
+
+## 2026-11-20｜渠道管理与华为 AppGallery
+
+- 「管理渠道」可隐藏、恢复和排序。偏好与业务记录分别保存，网页和 macOS App 从同一个运营服务读取。隐藏会从筛选、大盘汇总、连接卡片和手动批量同步中移除渠道，历史记录与定时同步开关仍可独立查看或调整。再次显示即可恢复原有数据。现有浏览器中的排序在首次保存后转入服务端。
+- 本机模式下，从「上架进度 → 商店连接 → 华为 AppGallery → 配置授权」选择 Android 或 HarmonyOS，填写华为中国站点的 ISHO App ID 和 API 客户端凭据。先用包名和软件包类型核对 App ID，再读取版本验证授权。验证成功后凭据只保存在当前 Mac 的登录钥匙串，运营接口不会回传凭据；连接独立运营服务器时仍使用服务器已保存的数据。
+- 使用官方只读查询读取在架版本和当前发布状态、下载报表与中国区评论。下载使用平台每日「新下载成功」口径和 UTC 日期，HarmonyOS 含卸载后的重下；保留渠道来源，缺失不填零。评论按稳定 ID 去重。分项无权限、未知状态或报表格式异常时保留成功分项和历史值。
+- 官方接口：[Android 应用信息](https://developer.huawei.com/consumer/cn/doc/APPGallery-connect-References/agcapi-app-info-query-0000001158365045/)、[HarmonyOS 应用信息](https://developer.huawei.com/consumer/cn/doc/app/agc-help-publish-api-appinfo-query-0000002236041422/)、[中国站下载报表](https://developer.huawei.com/consumer/cn/doc/app/agc-help-report-api-app-download-export-0000002271000737/)、[评论列表](https://developer.huawei.com/consumer/cn/doc/APPGallery-connect-References/agcapi-comapi-getreviews-0000001162468139/)。
