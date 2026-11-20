@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+from market_hub import MarketError
 
 import market_huawei as huawei
 
@@ -21,6 +22,11 @@ class HuaweiTests(unittest.TestCase):
                 self.assertEqual((row['status'], row['live_version'], row['pending_version']), ('approved', '1.0.8', '1.1.0'))
                 self.assertEqual(fetch.call_args_list[1].args[1], {'packageName': huawei.PACKAGE, 'packageTypes': apk_type})
                 self.assertEqual(fetch.call_args.args[:2], (f'/api/publish/{api_version}/app-info', {'appId': '24680', 'releaseType': 1}))
+
+    def test_authorization_is_bound_to_harmony(self):
+        with self.assertRaises(MarketError):
+            huawei.validate_credentials({**self.config, 'platform': 'android'})
+        self.assertEqual(huawei.PACKAGE, 'com.jinriyixiu.isho')
 
     def test_wrong_app_mapping_is_not_writable(self):
         with patch.object(huawei, 'request_json', side_effect=[

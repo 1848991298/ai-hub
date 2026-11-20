@@ -3,6 +3,7 @@ export const PORTALS={
  vivo:{name:'vivo',url:'https://dev.vivo.com.cn/',hosts:['vivo.com.cn','vivo.com']},
  xiaomi:{name:'小米',url:'https://dev.mi.com/',hosts:['mi.com','xiaomi.com']},
  tencent:{name:'应用宝',url:'https://app.open.qq.com/',hosts:['qq.com']},
+ huawei:{name:'华为 AppGallery',url:'https://developer.huawei.com/consumer/cn/service/josp/agc/index.html',hosts:['huawei.com']},
  honor:{name:'荣耀',url:'https://developer.honor.com/cn/',hosts:['honor.com','hihonor.com','cloud.huawei.com']},
 };
 export function trusted(provider,raw){try{const u=new URL(raw);return u.protocol==='https:'&&PORTALS[provider]?.hosts.some(h=>u.hostname===h||u.hostname.endsWith('.'+h));}catch{return false;}}

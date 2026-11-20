@@ -58,7 +58,7 @@ class CollectorTests(unittest.TestCase):
   self.assertTrue(all(c['status']=='unknown' for c in self.service.snapshot()['channels'] if c['channel']!='honor'))
   with self.assertRaises(MarketError):self.service.ingest_provider('vivo',groups)
   self.assertEqual(set(MarketCollectors(self.root,self.service).snapshot()['providers']),set(CHANNELS))
-  self.assertEqual(MarketCollector(self.root,self.service,'huawei').snapshot()['state'],'needs_configuration')
+  self.assertEqual(MarketCollector(self.root,self.service,'huawei').snapshot()['state'],'needs_login')
  def test_partial_result_enables_only_verified_platform(self):
   payload={'provider':'vivo','package':'com.jryx.isho','state':'partial','rows':{'channels':[{'channel':'vivo','status':'live','live_version':'1.0.2'}],'metrics':[],'reviews':[]},'parts':{'channels':{'state':'ok'},'reviews':{'state':'read_failed'}}}
   from types import SimpleNamespace
@@ -124,6 +124,23 @@ class CollectorTests(unittest.TestCase):
    save.assert_called_once_with(config)
   self.assertTrue(result['started'])
   self.assertNotIn('fixture-secret',json.dumps(result))
+ def test_huawei_web_requires_the_confirmed_harmony_package(self):
+  collector=MarketCollector(self.root,self.service,'huawei')
+  payload={'provider':'huawei','package':'com.jinriyixiu.isho','state':'partial',
+           'parts':{'channels':{'state':'ok'},'listing':{'state':'read_failed'}},
+           'rows':{'channels':[{'channel':'huawei','status':'not_submitted','pending_version':'1.1.0'}],
+                   'metrics':[],'reviews':[]}}
+  with patch('market_collect.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(payload))) as launch:
+   collector.run(open(self.root/'.local/hw-fixture.lock','a'),True)
+   self.assertEqual(launch.call_args.args[0][-3:], [str(self.root/'scripts/market-browser/portal.mjs'),'huawei','--login'])
+  self.assertEqual(collector.stored()['huawei_source'],'web')
+  self.assertEqual(collector.stored()['state'],'partial')
+  before=self.service.snapshot()['revision']
+  payload['package']='com.jryx.isho'
+  payload['rows']['channels'][0]['pending_version']='2.0.0'
+  with patch('market_collect.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(payload))):
+   collector.run(open(self.root/'.local/hw-fixture.lock','a'),False)
+  self.assertEqual(self.service.snapshot()['revision'],before)
  def test_explicit_batch_scope_rejects_unknown_empty_or_multiple_modes(self):
   manager=MarketCollectors(self.root,self.service)
   for scope in ([],['huawei','huawei'],['offlist'],[['vivo']]):

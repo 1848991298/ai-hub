@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {PORTALS,trusted,publicUrl,redact} from './portals.mjs';import {channel as xiaomiChannel} from './adapters/xiaomi.mjs';import {collect as vivo} from './adapters/vivo.mjs';
 function fakePage(host,data,text='已上架 1.0.2 ISHO com.jryx.isho 已发布'){return {url:()=>`https://${host}/`,evaluate:async(fn,{path,params})=>{const v=data[path];if(!v)throw new Error('unexpected path');return typeof v==='function'?v(params):v;},goto:async()=>{},locator:()=>({filter:()=>({first:()=>({waitFor:async()=>{},innerText:async()=>text})})})};}
-test('五个平台白名单，拒绝恶意后缀域名；链接和文本不带认证信息',()=>{assert.equal(Object.keys(PORTALS).length,5);assert.ok(trusted('honor','https://hnid-drcn.cloud.honor.com/CAS/'));assert.ok(!trusted('honor','https://honor.com.evil.example/'));assert.ok(!trusted('vivo','http://dev.vivo.com.cn/'));assert.equal(publicUrl('https://dev.mi.com/x?token=private'),'https://dev.mi.com/x');assert.ok(!redact('appKey\nnever-export\n正常内容').includes('never-export'));});
+test('六个平台白名单，拒绝恶意后缀域名；链接和文本不带认证信息',()=>{assert.equal(Object.keys(PORTALS).length,6);assert.ok(trusted('honor','https://hnid-drcn.cloud.honor.com/CAS/'));assert.ok(!trusted('honor','https://honor.com.evil.example/'));assert.ok(!trusted('vivo','http://dev.vivo.com.cn/'));assert.equal(publicUrl('https://dev.mi.com/x?token=private'),'https://dev.mi.com/x');assert.ok(!redact('appKey\nnever-export\n正常内容').includes('never-export'));});
 const miData={'/pltapi/uiue/myitems/listApp':[{packageName:'com.jryx.isho',appId:'2882303761520556760',namespaceValue:0}],'/pltapi/uiue/app/detailsPage':{packageName:'com.jryx.isho',appId:'2882303761520556760',onlineVersionSelling:true,onlineVersion:{appDetailsInfo:{summary:'已上架',versionName:'1.0.2',versionCode:25229}},releaseNewVersion:{appDetailsInfo:{summary:'未发布',versionName:'1.0.2',versionCode:0}}}};
 test('小米线上与未提交草稿分开；草稿占位构建号 0 不冒充有效版本',async()=>{const v=xiaomiChannel(miData['/pltapi/uiue/app/detailsPage'],'2882303761520556760');assert.equal(v.live_code,25229);assert.equal(v.status,'not_submitted');assert.equal(v.pending_code,null);});
 test('其他包名不绑定成 ISHO',async()=>{assert.throws(()=>xiaomiChannel({...miData['/pltapi/uiue/app/detailsPage'],packageName:'other'},'2882303761520556760'),/app_mismatch/);});
@@ -134,4 +134,27 @@ test('荣耀详情版本或包名不符时保留已验证的驳回状态并标�
   assert.deepEqual(data.parts.audit,{state:'read_failed'});
   assert.equal(data.state,'partial');
  }
+});
+
+
+test('华为只识别明确的在架状态，草稿不覆盖当前线上版本', async () => {
+ const {readVersions} = await import('./adapters/huawei.mjs');
+ const draft = readVersions(['1.1.0 准备提交']);
+ assert.equal(draft.row.status,'not_submitted');
+ assert.equal(draft.row.pending_version,'1.1.0');
+ assert.equal(draft.liveKnown,false);
+ assert.equal(Object.hasOwn(draft.row,'live_version'),false);
+ const live = readVersions(['1.0.8 已上架','1.1.0 待上架']);
+ assert.equal(live.row.live_version,'1.0.8');
+ assert.equal(live.row.status,'approved');
+ assert.throws(() => readVersions(['1.2.0 未知状态']),/unknown_status/);
+});
+test('华为只读取新下载列，保留官方明确的零', async () => {
+ const {downloadRows} = await import('./adapters/huawei.mjs');
+ const rows = downloadRows([
+  {'日期':'2026-01-01','新下载成功次数':'0','更新下载成功次数':'9'},
+  {'日期':'2026-01-02','新下载成功次数':'—','更新下载成功次数':'2'},
+ ]);
+ assert.deepEqual(rows.map(row=>row.downloads),[0]);
+ assert.throws(() => downloadRows([{'日期':'2026-01-01','新下载成功次数':'1'},{'日期':'2026-01-01','新下载成功次数':'2'}]),/report_schema/);
 });

@@ -13,7 +13,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from market_hub import MarketError, ZONE, clean, stamp
 
-PACKAGE = 'com.jryx.isho'
+PACKAGE = 'com.jinriyixiu.isho'
 ORIGIN = 'https://connect-api.cloud.huawei.com'
 ACCOUNT = 'ai-hub-market'
 SERVICE = 'com.leo.aihub.market.huawei.v1'
@@ -40,8 +40,8 @@ class NoRedirect(HTTPRedirectHandler):
 def validate_credentials(value):
     if not isinstance(value, dict) or set(value) != {'platform', 'app_id', 'client_id', 'client_secret'}:
         raise MarketError('请填写华为应用类型、App ID、客户端 ID 和密钥。')
-    if value['platform'] not in ('android', 'harmony'):
-        raise MarketError('请选择 Android 或 HarmonyOS。')
+    if value['platform'] != 'harmony':
+        raise MarketError('当前华为渠道绑定 ISHO 的 HarmonyOS 应用。')
     for name, limit in (('app_id', 32), ('client_id', 256), ('client_secret', 2048)):
         v = value[name]
         if not isinstance(v, str) or not v or len(v) > limit or not re.fullmatch(r'[!-~]+', v):

@@ -77,13 +77,15 @@ class MarketCollector:
   if self.provider=='huawei' and state in ('needs_configuration','needs_login','auth_key_unavailable'):
    return {
     'needs_configuration':'请配置华为 AppGallery Connect 查询授权。',
-    'needs_login':'华为 API 授权失效，请在 Hub 重新配置凭据。',
+    'needs_login':'请在华为官方专用窗口登录并选择 ISHO 的 HarmonyOS 应用。',
     'auth_key_unavailable':'读取华为查询凭据时未能访问本机钥匙串。',
    }[state]
   return messages.get(state,'OPPO 等待首次自动同步。').replace('OPPO',self.name)
  def snapshot(self):
   state=self.stored();running=self.active();scheduled=bool(self.enabled() and self.timer and self.timer.is_alive())
-  if not state and not self.enabled():state={'state':{'oppo':'manual','huawei':'needs_configuration'}.get(self.provider,'needs_login')}
+  if not state and not self.enabled():state={'state':'manual' if self.provider=='oppo' else 'needs_login'}
+  if self.provider=='huawei' and state.get('state')=='needs_configuration' and state.get('huawei_source')!='api':
+   state={**state,'state':'needs_login'}
   if state.get('state')=='running' and not running:state={**state,'state':'interrupted'}
   shown='running' if running else state.get('state','waiting')
   if state.get('parts'):
@@ -96,8 +98,6 @@ class MarketCollector:
   operation=body['operation']
   if operation in ('pause','resume'):
    self.enable(operation=='resume');self.start_scheduler();return {'started':False,'collection':self.snapshot()}
-  if operation=='login' and self.provider=='huawei':
-   raise MarketError('请使用华为 API 授权配置。')
   return {'started':self.start(login=operation=='login'),'collection':self.snapshot()}
  def configure_huawei(self, body):
   from market_huawei import HuaweiError, read_release, save_credentials, validate_credentials
@@ -111,6 +111,7 @@ class MarketCollector:
    try:
     read_release(settings)
     save_credentials(settings)
+    self.persist({**self.stored(),'huawei_source':'api'})
    except HuaweiError as error:
     raise MarketError(self.reason(error.state), 403 if error.state=='access_denied' else 400)
   return {'started':self.start(),'collection':self.snapshot()}
@@ -157,7 +158,12 @@ class MarketCollector:
  def run(self,lockfile,login,future=None):
   state=self.stored()
   try:
+   expected_package = 'com.jryx.isho'
    if self.provider=='huawei':
+    from market_huawei import PACKAGE
+    expected_package = PACKAGE
+   use_huawei_api = self.provider=='huawei' and not login and state.get('huawei_source')=='api'
+   if use_huawei_api:
     from market_huawei import collect
     payload=collect()
    else:
@@ -167,7 +173,7 @@ class MarketCollector:
     result=subprocess.run([node,str(self.root/'scripts/market-browser'/script[0]),*script[1:],*(['--login'] if login else [])],cwd=self.root,env={**os.environ,'AI_HUB_ROOT':str(self.root)},capture_output=True,text=True,timeout=12*60*60+120 if login else SYNC_TIMEOUT)
     if result.returncode or len(result.stdout)>4*1024*1024:raise ValueError('collector failed')
     payload=json.loads(result.stdout)
-   if payload.get('provider')!=self.provider or payload.get('package')!='com.jryx.isho' or (self.provider=='oppo' and payload.get('app_id')!='37892440'):raise ValueError('binding mismatch')
+   if payload.get('provider')!=self.provider or payload.get('package')!=expected_package or (self.provider=='oppo' and payload.get('app_id')!='37892440'):raise ValueError('binding mismatch')
    current=payload.get('state');allowed={'ready','partial','needs_login','profile_busy','read_failed','needs_adapter','needs_configuration','app_not_found','access_denied','developer_unverified','auth_restore_failed','auth_key_unavailable'}
    if current not in allowed:raise ValueError('invalid state')
    parts=payload.get('parts',{})
@@ -175,6 +181,8 @@ class MarketCollector:
    changed=0
    if current in ('ready','partial'):
     changed=self.service.ingest_provider(self.provider,payload['rows'])
+    if self.provider=='huawei' and not use_huawei_api:
+     state={**state,'huawei_source':'web'}
    state={**state,'state':current,'last_finished':stamp(),'parts':parts,'changed':changed}
    if current=='ready':
     state['last_success']=stamp()

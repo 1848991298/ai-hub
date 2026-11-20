@@ -63,7 +63,8 @@ export function HuaweiAuthorization({saving, onSave}) {
     <p className="market-caption">使用中国站点 AppGallery Connect 的 API 客户端。通过 ISHO 应用绑定核对后，凭据保存在当前 Mac 的登录钥匙串。</p>
     <a href="https://developer.huawei.com/consumer/cn/service/josp/agc/index.html" target="_blank" rel="noreferrer">打开华为开发者后台<ArrowUpRight size={14}/></a>
     <fieldset className="market-form" disabled={saving}>
-      <label>应用类型<select name="platform" defaultValue="harmony"><option value="harmony">HarmonyOS</option><option value="android">Android</option></select></label>
+      <input type="hidden" name="platform" value="harmony"/>
+      <label>应用类型<input value="HarmonyOS · com.jinriyixiu.isho" readOnly/></label>
       <label>App ID<input name="app_id" required inputMode="numeric" pattern="[0-9]{1,32}" maxLength={32} autoComplete="off"/></label>
       <label>客户端 ID<input name="client_id" required maxLength={256} autoComplete="off"/></label>
       <label>客户端密钥<input name="client_secret" type="password" required maxLength={2048} autoComplete="off"/></label>
