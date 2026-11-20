@@ -108,12 +108,12 @@ const statusTone = { '未启动': 'is-idle', '开发中': 'is-run', '测试中':
 const priorityTone = { P0: 'is-p0', P1: 'is-p1', P2: 'is-p2' };
 const pressedMode = mode => mode === 'include' ? 'true' : mode === 'exclude' ? 'mixed' : 'false';
 
-function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', width = 300, chevron, status, disabled, children }) {
+function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', width = 300, chevron, inlineValue, triggerClass, panelClass, disabled, children }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState(null);
   const root = useRef(null), trigger = useRef(null), panel = useRef(null);
   const id = useId();
-  const isStatusMenu = status !== undefined;
+  const inline = inlineValue !== undefined;
   useLayoutEffect(() => {
     if (!open) return;
     function place() {
@@ -122,9 +122,9 @@ function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', w
       const top = rect.bottom + 8;
       const below = innerHeight - top - 12;
       const above = rect.top - 20;
-      const flip = isStatusMenu && below < 148 && above > below;
+      const flip = inline && below < 148 && above > below;
       setPosition({
-        container: isStatusMenu ? trigger.current.closest('dialog:modal') || document.body : null,
+        container: inline ? trigger.current.closest('dialog:modal') || document.body : null,
         style: {
           width: size, left: Math.max(12, Math.min(align === 'end' ? rect.right - size : rect.left, innerWidth - size - 12)),
           ...(flip ? { bottom: innerHeight - rect.top + 8, maxHeight: above } : { top, maxHeight: Math.max(80, below) }),
@@ -138,42 +138,42 @@ function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', w
     }
     function scroll(event) { if (!inside(event.target)) setOpen(false); }
     place();
-    const focus = isStatusMenu ? requestAnimationFrame(() => {
-      const option = panel.current?.querySelector('button[aria-pressed="true"]') || panel.current?.querySelector('button');
+    const focus = inline ? requestAnimationFrame(() => {
+      const option = panel.current?.querySelector('button[aria-pressed="true"]') || panel.current?.querySelector('input, button');
       option?.focus({ preventScroll: true });
     }) : null;
     document.addEventListener('pointerdown', outside);
     document.addEventListener('focusin', outside);
-    document.addEventListener('keydown', escape, isStatusMenu);
+    document.addEventListener('keydown', escape, inline);
     document.addEventListener('scroll', scroll, true);
     addEventListener('resize', place);
     return () => {
       if (focus !== null) cancelAnimationFrame(focus);
       document.removeEventListener('pointerdown', outside);
       document.removeEventListener('focusin', outside);
-      document.removeEventListener('keydown', escape, isStatusMenu);
+      document.removeEventListener('keydown', escape, inline);
       document.removeEventListener('scroll', scroll, true);
       removeEventListener('resize', place);
     };
-  }, [open, align, width, isStatusMenu]);
-  const popup = open && <div id={id} ref={panel} className={`ledger-menu-panel${isStatusMenu ? ' ledger-status-menu' : ''}`} role="dialog" aria-label={label}
-    style={position?.style || { visibility: 'hidden' }} onClick={isStatusMenu ? event => event.stopPropagation() : undefined}>
+  }, [open, align, width, inline]);
+  const popup = open && <div id={id} ref={panel} className={`ledger-menu-panel ${panelClass || ''}`} role="dialog" aria-label={label}
+    style={position?.style || { visibility: 'hidden' }} onClick={inline ? event => event.stopPropagation() : undefined}>
       {typeof children === 'function' ? children(() => { setOpen(false); trigger.current.focus(); }) : children}
     </div>;
-  return <div className={isStatusMenu ? 'ledger-menu ledger-status-control' : 'ledger-menu'} ref={root}>
-    <button type="button" ref={trigger} className={isStatusMenu ? `ledger-pill ledger-status-trigger ${statusTone[status] || ''}` : 'ledger-menu-trigger'}
-      disabled={disabled} aria-label={triggerLabel} title={isStatusMenu ? label : count ? `${count} 项筛选条件` : undefined}
+  return <div className={inline ? 'ledger-menu ledger-inline-control' : 'ledger-menu'} ref={root}>
+    <button type="button" ref={trigger} className={triggerClass || 'ledger-menu-trigger'}
+      disabled={disabled} aria-label={triggerLabel} title={inline ? label : count ? `${count} 项筛选条件` : undefined}
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={event => {
-        if (isStatusMenu) event.stopPropagation();
+        if (inline) event.stopPropagation();
         setOpen(value => !value);
       }} onKeyDown={event => {
         if (event.key !== 'ArrowDown') return;
         event.preventDefault();
         setOpen(true);
-        if (!isStatusMenu) requestAnimationFrame(() => panel.current?.querySelector('button, input, select, summary')?.focus());
+        if (!inline) requestAnimationFrame(() => panel.current?.querySelector('button, input, select, summary')?.focus());
       }}>
-      {Icon && <Icon size={14}/>} {isStatusMenu ? status : triggerLabel}{count > 0 && <b>{count}</b>}
-      {(chevron || isStatusMenu) && <ChevronDown size={isStatusMenu ? 11 : 12} aria-hidden="true"/>}
+      {Icon && <Icon size={14}/>} {inline ? <span>{inlineValue}</span> : triggerLabel}{count > 0 && <b>{count}</b>}
+      {(chevron || inline) && <ChevronDown size={inline ? 11 : 12} aria-hidden="true"/>}
     </button>
     {popup && (position?.container ? createPortal(popup, position.container) : popup)}
   </div>;
@@ -196,14 +196,48 @@ function Pill({ tone, mode, onClick, children }) {
 function RecordStatusMenu({ row, busy, onChange }) {
   const current = canonicalStatus(row.status) || '未启动';
   if (!row.id.startsWith('rec')) return <Pill tone={statusTone[current]}>{current}</Pill>;
-  return <LedgerMenu label="修改状态" triggerLabel={`修改状态 · ${current} · ${recordTitle(row)}`} width={158} status={current} disabled={busy}>
+  return <LedgerMenu label="修改状态" triggerLabel={`修改状态 · ${current} · ${recordTitle(row)}`} width={158}
+    inlineValue={current} triggerClass={`ledger-pill ledger-status-trigger ${statusTone[current] || ''}`}
+    panelClass="ledger-status-menu" disabled={busy}>
     {close => statuses.map(value => <button key={value} type="button" aria-pressed={value === current} onClick={() => {
       close();
-      if (value !== current) onChange(row, value);
+      if (value !== current) onChange(row, { status: value });
     }}>
       <Pill tone={statusTone[value]}>{value}</Pill>
       {value === current && <Check size={14} aria-hidden="true"/>}
     </button>)}
+  </LedgerMenu>;
+}
+
+function QuickDueForm({ current, onSave }) {
+  const [date, setDate] = useState(current);
+  return <form className="ledger-quick-due-form" onSubmit={event => {
+    event.preventDefault();
+    if (date && date !== current) onSave(date);
+  }}>
+    <label>
+      <span>截止日期</span>
+      <input type="date" value={date} onChange={event => setDate(event.target.value)} required />
+    </label>
+    <div className="ledger-quick-due-actions">
+      {current && <button type="button" className="text-button" onClick={() => onSave(null)}>清空日期</button>}
+      <button type="submit" className="ledger-primary" disabled={!date || date === current}>保存日期</button>
+    </div>
+  </form>;
+}
+
+function RecordDueMenu({ row, overdue, busy, onChange }) {
+  const current = row.due || '';
+  if (!row.id.startsWith('rec')) return current || '—';
+  const label = current ? '修改截止日期' : '设置截止日期';
+  return <LedgerMenu label={label} triggerLabel={[label, current, recordTitle(row)].filter(Boolean).join(' · ')}
+    inlineValue={current || '设置日期'} width={218} disabled={busy}
+    triggerClass={`ledger-quick-due-trigger${current ? '' : ' is-empty'}${overdue ? ' ledger-past' : ''}`}
+    panelClass="ledger-quick-due-menu">
+    {close => <QuickDueForm current={current} onSave={due => {
+      close();
+      onChange(row, { due });
+    }}/>}
   </LedgerMenu>;
 }
 
@@ -660,8 +694,8 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
     if (saving || row.status === status) return;
     await submitPatches([row], { status });
   }
-  function quickStatus(row, status) {
-    return submitPatches([row], { status }, { preserveSelection: true });
+  function quickEdit(row, patch) {
+    return submitPatches([row], patch, { preserveSelection: true });
   }
   function toggleTag(name) {
     setEditor(current => {
@@ -922,9 +956,12 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
       case 'category': return <td key={key}>{row.kind !== 'issue' && !row.category
         ? <button type="button" className="ledger-empty-value" title="未分类 · 点击筛选" aria-label="筛选未分类" aria-pressed={pressedMode(filters.category?.['未分类'])} onClick={event => { event.stopPropagation(); setFacet('category', '未分类'); }}>—</button>
         : <Pill tone={row.kind === 'issue' ? '' : row.category === '优化' ? 'is-category-opt' : 'is-category-need'} mode={filters.category?.[categoryOf(row)]} onClick={() => setFacet('category', categoryOf(row))}>{categoryOf(row)}</Pill>}</td>;
-      case 'status': return <td key={key}><RecordStatusMenu row={row} busy={saving} onChange={quickStatus}/></td>;
+      case 'status': return <td key={key}><RecordStatusMenu row={row} busy={saving} onChange={quickEdit}/></td>;
       case 'created': return <td key={key} className="ledger-time" title={row.created_at || undefined}>{shortClock(row.created_at)}</td>;
-      case 'due': return <td key={key} className={overdue ? 'ledger-time ledger-past' : 'ledger-time'} title={overdue ? `${row.due} · 逾期` : undefined}>{row.due || '—'}{overdue && <span className="ledger-overdue-dot" aria-label="逾期" />}</td>;
+      case 'due': return <td key={key} className={overdue ? 'ledger-time ledger-due-cell ledger-past' : 'ledger-time ledger-due-cell'}>
+        <div className="ledger-due-cell-content"><RecordDueMenu row={row} overdue={overdue} busy={saving} onChange={quickEdit}/>
+          {overdue && <span className="ledger-overdue-dot" aria-label="逾期" />}</div>
+      </td>;
       case 'priority': return <td key={key}><Pill tone={priorityTone[row.priority]} mode={filters.priority[row.priority]} onClick={row.priority ? () => setFacet('priority', row.priority) : undefined}>{row.priority}</Pill></td>;
       case 'note': return <td key={key} className="ledger-note">{row.note ? recordButton(row, 'note', rowHeight === 'auto') : '—'}</td>;
       default: return null;
@@ -1116,9 +1153,10 @@ export default function LedgerPage({ sinkDone = true, route = {}, projects = [],
         <div className="ledger-inspector-content ledger-record-detail" key={inspection.key}>
           <section><h3>内容</h3><RecordText text={inspected.content}/></section>
           <section><h3>状态与标签</h3><div className="ledger-inspector-status">
-            <RecordStatusMenu row={inspected} busy={saving} onChange={quickStatus}/>
+            <RecordStatusMenu row={inspected} busy={saving} onChange={quickEdit}/>
             {(inspected.tags || []).map(tag => <Pill key={tag} tone="is-tag">{tag}</Pill>)}
           </div></section>
+          <section><h3>截止日期</h3><RecordDueMenu row={inspected} overdue={isOverdue(inspected, day)} busy={saving} onChange={quickEdit}/></section>
           {inspected.note && <section><h3 ref={noteHeading} tabIndex={-1}>备注</h3><RecordText text={inspected.note}/></section>}
           {(data?.attachment_fields?.[inspected.kind] || inspected.attachments?.length) ? <RecordImages
             row={inspected} disabled={saving} error={imageError}
