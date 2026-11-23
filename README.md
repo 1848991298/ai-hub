@@ -74,6 +74,15 @@ AI Hub 是在自己 Mac 上运行的工作台。你可以把 Cursor / Codex 的�
 
 工作树的 **工作区** 视图分开显示已暂存、未暂存和未跟踪文件。逐行差异支持单栏、左右对照和折行切换。Git 详情为只读，远端跟踪显示本机上次获取的引用。
 
+侧栏的 **分支清单** 可对照主线、开发和具体发布分支的合入状态。点一条查看提交证据及工作树。首次使用时，在 AI Hub 根目录登记需要跟踪的分支：
+
+```bash
+python3 scripts/branch_registry.py --repo "/path/to/project" --branch "feature/example" \
+  --purpose "记录这条分支的用途" --base "origin/main" --main main --online
+```
+
+按工程的实际分支名填写参数。需要一并核对开发和发布分支时，使用 `--dev` 和 `--release`。合入检查以确认过的候选提交为准，可用 `--candidate` 记录。工具把登记保存在本机，使用 `python3 scripts/branch_registry.py --all --online` 可复核全部条目，再在页面中点 **重新读取**。
+
 ### 2. 给 Cursor 和 Codex 使用同一份规则
 
 例如，你希望两端都遵守“中文回复、修改前检查分支、提交前确认”，可以把自己的约定写在共享正文中。

@@ -93,6 +93,7 @@ def main():
         shutil.copy2(ROOT / 'scripts/preview_hub.py', resources / 'preview_hub.py')
         shutil.copy2(ROOT / 'scripts/usage_hub.py', resources / 'usage_hub.py')
         shutil.copy2(ROOT / 'scripts/project_hub.py', resources / 'project_hub.py')
+        shutil.copy2(ROOT / 'scripts/branch_registry.py', resources / 'branch_registry.py')
         shutil.copy2(ROOT / 'scripts/rules_hub.py', resources / 'rules_hub.py')
         shutil.copy2(ROOT / 'scripts/market_hub.py', resources / 'market_hub.py')
         shutil.copy2(ROOT / 'scripts/market_server.py', resources / 'market_server.py')

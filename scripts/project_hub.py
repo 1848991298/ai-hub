@@ -124,7 +124,8 @@ def remote_info(name, raw):
         if not re.fullmatch(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+', repository): repository = ''
     except ValueError:
         host = ''; repository = ''
-    platform = {'github.com': 'GitHub', 'gitlab.com': 'GitLab', 'bitbucket.org': 'Bitbucket'}.get(host, '自建 Git' if host else '远端待识别')
+    platform = {'github.com': 'GitHub', 'gitlab.com': 'GitLab', 'bitbucket.org': 'Bitbucket',
+                'codeup.aliyun.com': '云效 Codeup'}.get(host, '自建 Git' if host else '远端待识别')
     return dict(name=name, host=host, repository=repository, platform=platform)
 
 

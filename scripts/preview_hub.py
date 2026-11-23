@@ -16,6 +16,7 @@ import webbrowser
 from urllib.parse import parse_qs, urlsplit
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from branch_registry import read_records as branch_records
 from usage_hub import UsageService
 from project_hub import ProjectService, ProjectError, git as project_git
 from rules_hub import RulesService, RulesError
@@ -313,6 +314,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == '/api/usage':
             self.send_json(usage_service().snapshot())
+            return
+        if path == '/api/projects/branch-ledger':
+            try:
+                self.send_json({'records': branch_records(ROOT)})
+            except (OSError, ValueError):
+                self.send_json({'error': '本机分支清单暂不可读取。'}, status=500)
             return
         if path == '/api/projects/capabilities':
             self.send_json(project_service().capabilities())
