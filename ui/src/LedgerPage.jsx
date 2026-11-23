@@ -5,6 +5,7 @@ import { blankForm, categoryOf, taskCategories, recordTypes, recordScope, draftW
 import TaskContext from './TaskContext.jsx';
 import TaskAssistant from './TaskAssistant.jsx';
 import { RecordDrawer, RecordInspector, RecordImages, RecordText, RecordTextarea, imageTypes, maxImageCount, maxImageSize, stageImage, useRecordPreview } from './LedgerRecord.jsx';
+import LedgerDueCalendar from './LedgerDueCalendar.jsx';
 import { StatusLink, WorkspaceStatus } from './WorkspaceChrome.jsx';
 import './ledger.css';
 
@@ -108,7 +109,7 @@ const statusTone = { '未启动': 'is-idle', '开发中': 'is-run', '测试中':
 const priorityTone = { P0: 'is-p0', P1: 'is-p1', P2: 'is-p2' };
 const pressedMode = mode => mode === 'include' ? 'true' : mode === 'exclude' ? 'mixed' : 'false';
 
-function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', width = 300, chevron, inlineValue, triggerClass, panelClass, disabled, children }) {
+function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', width = 300, preferredHeight = 148, chevron, inlineValue, triggerClass, panelClass, disabled, children }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState(null);
   const root = useRef(null), trigger = useRef(null), panel = useRef(null);
@@ -122,7 +123,7 @@ function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', w
       const top = rect.bottom + 8;
       const below = innerHeight - top - 12;
       const above = rect.top - 20;
-      const flip = inline && below < 148 && above > below;
+      const flip = inline && below < preferredHeight && above > below;
       setPosition({
         container: inline ? trigger.current.closest('dialog:modal') || document.body : null,
         style: {
@@ -139,7 +140,8 @@ function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', w
     function scroll(event) { if (!inside(event.target)) setOpen(false); }
     place();
     const focus = inline ? requestAnimationFrame(() => {
-      const option = panel.current?.querySelector('button[aria-pressed="true"]') || panel.current?.querySelector('input, button');
+      const option = panel.current?.querySelector('[data-initial-focus], button[aria-pressed="true"]') ||
+        panel.current?.querySelector('input, button');
       option?.focus({ preventScroll: true });
     }) : null;
     document.addEventListener('pointerdown', outside);
@@ -155,7 +157,7 @@ function LedgerMenu({ label, triggerLabel, icon: Icon, count, align = 'start', w
       document.removeEventListener('scroll', scroll, true);
       removeEventListener('resize', place);
     };
-  }, [open, align, width, inline]);
+  }, [open, align, width, preferredHeight, inline]);
   const popup = open && <div id={id} ref={panel} className={`ledger-menu-panel ${panelClass || ''}`} role="dialog" aria-label={label}
     style={position?.style || { visibility: 'hidden' }} onClick={inline ? event => event.stopPropagation() : undefined}>
       {typeof children === 'function' ? children(() => { setOpen(false); trigger.current.focus(); }) : children}
@@ -209,32 +211,15 @@ function RecordStatusMenu({ row, busy, onChange }) {
   </LedgerMenu>;
 }
 
-function QuickDueForm({ current, onSave }) {
-  const [date, setDate] = useState(current);
-  return <form className="ledger-quick-due-form" onSubmit={event => {
-    event.preventDefault();
-    if (date && date !== current) onSave(date);
-  }}>
-    <label>
-      <span>截止日期</span>
-      <input type="date" value={date} onChange={event => setDate(event.target.value)} required />
-    </label>
-    <div className="ledger-quick-due-actions">
-      {current && <button type="button" className="text-button" onClick={() => onSave(null)}>清空日期</button>}
-      <button type="submit" className="ledger-primary" disabled={!date || date === current}>保存日期</button>
-    </div>
-  </form>;
-}
-
 function RecordDueMenu({ row, overdue, busy, onChange }) {
   const current = row.due || '';
   if (!row.id.startsWith('rec')) return current || '—';
   const label = current ? '修改截止日期' : '设置截止日期';
   return <LedgerMenu label={label} triggerLabel={[label, current, recordTitle(row)].filter(Boolean).join(' · ')}
-    inlineValue={current || '设置日期'} width={218} disabled={busy}
+    inlineValue={current || '设置日期'} width={296} preferredHeight={332} disabled={busy}
     triggerClass={`ledger-quick-due-trigger${current ? '' : ' is-empty'}${overdue ? ' ledger-past' : ''}`}
     panelClass="ledger-quick-due-menu">
-    {close => <QuickDueForm current={current} onSave={due => {
+    {close => <LedgerDueCalendar current={current} today={today()} onSave={due => {
       close();
       onChange(row, { due });
     }}/>}
